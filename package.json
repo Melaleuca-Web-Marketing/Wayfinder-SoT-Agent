@@ -1,0 +1,34 @@
+{
+  "name": "web-first-knowledge-agent",
+  "version": "0.1.0",
+  "description": "Melaleuca web-first RAG tool built with the OpenAI Responses API and tool calls.",
+  "type": "module",
+  "scripts": {
+    "build:server": "tsc -p tsconfig.json",
+    "build:web": "npm run build --prefix client",
+    "build": "npm run build:server && npm run build:web",
+    "dev:ask": "tsx src/cli.ts",
+    "ask": "node dist/src/cli.js",
+    "eval": "tsx eval/run_eval.ts",
+    "dev:server": "tsx src/server.ts",
+    "dev:client": "npm run dev --prefix client",
+    "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
+    "start": "NODE_ENV=production node dist/src/server.js"
+  },
+  "dependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "multer": "^2.0.2",
+    "openai": "^4.52.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.5"
+  }
+}

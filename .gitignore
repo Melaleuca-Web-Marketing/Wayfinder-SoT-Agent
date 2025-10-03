@@ -1,0 +1,14 @@
+node_modules/
+client/node_modules/
+dist/
+client/dist/
+.env
+.env.*
+.DS_Store
+uploads/
+_uploads/
+.uploads/
+*.log
+.vector-store.json
+server.log
+client.log

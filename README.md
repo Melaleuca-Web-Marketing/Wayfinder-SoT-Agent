@@ -1,0 +1,72 @@
+# Melaleuca Web-First Knowledge Agent
+
+A Node.js / TypeScript implementation of the web-first retrieval flow described in `knowledge_foundation_responses_api_melaleuca_riverbend_ranch.md`. The agent prioritises Melaleuca-owned domains via the OpenAI Responses API, falls back to vector stores only when needed, and emits citations for every answer.
+
+## Prerequisites
+
+- Node.js 20+
+- An OpenAI API key with access to the Responses API + web search preview
+
+## Setup
+
+```bash
+cp .env.example .env
+# edit .env with your credentials and domain overrides if needed
+npm install
+npm install --prefix client
+```
+
+## Local Development
+
+Run the full stack (API server + Vite UI) in watch mode (API defaults to port 4001):
+
+```bash
+npm run dev
+```
+
+The backend listens on `http://localhost:4001` and the UI on `http://localhost:5173` (proxied to the API during dev).
+
+## Production Build & Serve
+
+```bash
+npm run build        # builds server + web assets
+npm start            # serves API + compiled UI (NODE_ENV=production)
+```
+
+## CLI & SDK Usage
+
+Run an interactive question:
+
+```bash
+npm run dev:ask -- "How do I become a Melaleuca customer?"
+```
+
+Use a topic hint when you already know the vertical:
+
+```bash
+npm run dev:ask -- --hint riverbend "What is Riverbend Ranch Beef?"
+```
+
+Build once for production use:
+
+```bash
+npm run build
+node dist/cli.js -- "Show me Melaleuca's loyalty programs"
+```
+
+## Evaluations
+
+Golden QA checks ensure citations stay on the correct domains:
+
+```bash
+npm run eval
+```
+
+Each case asserts that at least one cited URL starts with the required domain. Add more questions to `eval/golden_qa.jsonl` as new topics launch.
+
+## Vector Store Management & UI
+
+- When the server starts it will look for `VECTOR_STORE_ID` in `.env`. If none is provided it creates a new vector store and caches the ID in `.vector-store.json`.
+- Visit the Documents tab in the UI to upload PDF/Markdown assets. Files are streamed to OpenAI, attached to the vector store, and listed with their indexing status.
+- The Chat tab provides a conversational harness that shares context with the vector store and enforces on-domain sourcing. Every answer ends with a `Sources` block.
+- The footer pings the OpenAI API once per minute (and on demand) to confirm connectivity and the active model.
