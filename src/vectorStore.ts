@@ -79,7 +79,7 @@ export async function listVectorStoreFiles() {
 export async function uploadFileToVectorStore(localPath: string, filename: string) {
   const id = await ensureVectorStoreId();
   const file = await client.files.create({
-    file: createReadStream(localPath),
+    file: await OpenAI.toFile(createReadStream(localPath), filename),
     purpose: 'assistants',
   });
 

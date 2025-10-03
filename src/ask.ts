@@ -130,6 +130,22 @@ function extractFirstMessageText(response: Response): string {
   return '';
 }
 
+function extractAssistantMessages(response: Response): string[] {
+  const messages: string[] = [];
+  for (const item of response.output ?? []) {
+    if (item.type === 'message' && item.role === 'assistant') {
+      const text = item.content
+        .map((piece) => (piece.type === 'output_text' ? piece.text : ''))
+        .join('\n')
+        .trim();
+      if (text.length > 0) {
+        messages.push(text);
+      }
+    }
+  }
+  return messages;
+}
+
 export async function ask(params: AskParams): Promise<AskResult> {
   const message = params.message.trim();
   if (!message) {
@@ -185,9 +201,16 @@ export async function ask(params: AskParams): Promise<AskResult> {
 }
 
 function normalizeAnswer(response: Response): string {
+  const assistantMessages = extractAssistantMessages(response);
+  const lastMessage = assistantMessages[assistantMessages.length - 1];
+  if (lastMessage) {
+    return lastMessage;
+  }
+
   if (response.output_text && response.output_text.trim().length > 0) {
     return response.output_text.trim();
   }
+
   return extractFirstMessageText(response);
 }
 

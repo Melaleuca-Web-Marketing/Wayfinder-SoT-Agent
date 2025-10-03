@@ -1,6 +1,8 @@
-# Melaleuca Web-First Knowledge Agent
+# Wayfinder SoT Agent
 
-A Node.js / TypeScript implementation of the web-first retrieval flow described in `knowledge_foundation_responses_api_melaleuca_riverbend_ranch.md`. The agent prioritises Melaleuca-owned domains via the OpenAI Responses API, falls back to vector stores only when needed, and emits citations for every answer.
+Wayfinder SoT (Source-of-Truth) Agent is a full-stack toolkit for building web-first retrieval assistants. It combines an OpenAI Responses API back end, vector-store management APIs, and a React “control center” UI so teams can ground chat answers in first-party sources, ingest new documents, and monitor connectivity in one place.
+
+A Node.js / TypeScript implementation of the web-first retrieval flow described in `knowledge_foundation_responses_api_melaleuca_riverbend_ranch.md`. The default configuration prioritises Melaleuca-owned domains via the OpenAI Responses API, falls back to vector stores only when needed, and emits citations for every answer, but you can swap the domain heuristics for any other property.
 
 ## Prerequisites
 
