@@ -143,6 +143,11 @@ body {
   margin-bottom: 1rem;
 }
 
+.chat-turn.streaming .chat-content {
+  opacity: 0.75;
+  font-style: italic;
+}
+
 .chat-turn .chat-role {
   font-weight: 600;
   font-size: 0.85rem;
@@ -185,6 +190,24 @@ body {
   resize: vertical;
   min-height: 100px;
   font-family: inherit;
+}
+
+.chat-voice-status {
+  margin: 0 0 0.75rem;
+  color: #5a648a;
+  font-size: 0.85rem;
+}
+
+.chat-voice-status.status-connecting {
+  color: #8a5a00;
+}
+
+.chat-voice-status.status-active {
+  color: #1f5ff0;
+}
+
+.voice-audio {
+  display: none;
 }
 
 .chat-form-actions {

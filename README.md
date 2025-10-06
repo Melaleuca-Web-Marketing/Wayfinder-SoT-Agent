@@ -83,3 +83,10 @@ The API layer adds baseline protections so prompt/response handling stays on-bra
 - **Output enforcement:** `ask()` clamps `max_output_tokens` (default 600) and forces a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.
 
 Tweak the `.env` knobs to adjust these guardrails as you scale.
+
+## Voice Mode (Realtime API)
+
+- Click **Start voice** in the Chat panel to launch a WebRTC session with the OpenAI Realtime API (`REALTIME_MODEL`, default `gpt-4o-realtime-preview-2024-12-17`).
+- The browser captures microphone input, streams it to the model, and plays synthesized audio replies while streaming transcripts into the existing chat window (including Sources when returned).
+- Use **Stop voice** to end the session; transcripts remain in history alongside typed messages for easy follow-up.
+- Configure voice defaults via `REALTIME_VOICE` and reuse the same security guardrails enforced for text requests.
