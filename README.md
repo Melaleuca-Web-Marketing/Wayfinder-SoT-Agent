@@ -72,3 +72,14 @@ Each case asserts that at least one cited URL starts with the required domain. A
 - Visit the Documents tab in the UI to upload PDF/Markdown assets. Files are streamed to OpenAI, attached to the vector store, and listed with their indexing status.
 - The Chat tab provides a conversational harness that shares context with the vector store and enforces on-domain sourcing. Every answer ends with a `Sources` block.
 - The footer pings the OpenAI API once per minute (and on demand) to confirm connectivity and the active model.
+
+## Security Guardrails (MVP)
+
+The API layer adds baseline protections so prompt/response handling stays on-brand:
+
+- **Input caps:** messages longer than `MAX_MESSAGE_CHARS` (default 2,000) or containing more than `MAX_MESSAGE_URLS` (default 20) are rejected.
+- **Moderation + scope guard:** prompts flow through `omni-moderation-latest` and a simple keyword scope filter before any model call.
+- **Rate limits:** per-minute (`RATE_LIMIT_PER_MINUTE`, default 10) and per-day (`RATE_LIMIT_PER_DAY`, default 200) throttles via `express-rate-limit`.
+- **Output enforcement:** `ask()` clamps `max_output_tokens` (default 600) and forces a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.
+
+Tweak the `.env` knobs to adjust these guardrails as you scale.

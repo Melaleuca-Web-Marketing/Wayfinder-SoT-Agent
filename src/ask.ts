@@ -21,6 +21,7 @@ export interface ConversationTurn {
 }
 
 const client = new OpenAI({ apiKey: requireApiKey() });
+const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? '600');
 
 function inferTopicHint(message: string): TopicHint {
   const normalized = message.toLowerCase();
@@ -162,6 +163,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
 
   const response = await client.responses.create({
     model,
+    max_output_tokens: MAX_OUTPUT_TOKENS,
     input: [
       {
         role: 'system',
@@ -190,12 +192,13 @@ export async function ask(params: AskParams): Promise<AskResult> {
   });
 
   const answerWithSources = ensureSourcesSection(normalizeAnswer(response));
+  const finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig);
   if (!hasSourcesSection(answerWithSources)) {
     console.warn('Model response missing Sources section.');
   }
 
   return {
-    answer: answerWithSources,
+    answer: finalAnswer,
     response,
   };
 }
@@ -284,4 +287,43 @@ function ensureSourcesSection(answer: string): string {
 
   const sourcesLines = urls.map((url) => `- ${url}`);
   return `${answer.trim()}\n\nSources:\n${sourcesLines.join('\n')}`;
+}
+
+function enforceSourceAllowlist(answer: string, domainConfig: DomainConfig): string {
+  const entries = extractSourceEntries(answer);
+  const urls = extractUrls(answer);
+
+  const hasAllowedUrl = urls.some((url) => isAllowedSource(url, domainConfig.preferredDomains));
+  const hasFileCitation = entries.some((entry) => /file-[a-zA-Z0-9]/.test(entry));
+
+  if (hasAllowedUrl || hasFileCitation) {
+    return answer;
+  }
+
+  const fallback = domainConfig.fallbackUrl;
+  return `I couldn't confirm from our site or files. Please check: ${fallback}.\n\nSources:\n- ${fallback}`;
+}
+
+function extractSourceEntries(answer: string): string[] {
+  const match = /Sources\s*:/i.exec(answer);
+  if (!match) {
+    return [];
+  }
+
+  const startIndex = match.index + match[0].length;
+  return answer
+    .slice(startIndex)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function isAllowedSource(url: string, allowedDomains: string[]): boolean {
+  try {
+    const parsed = new URL(url);
+    const hostPath = `${parsed.hostname}${parsed.pathname}`.replace(/\/$/, '');
+    return allowedDomains.some((domain) => hostPath.startsWith(stripScheme(domain)));
+  } catch {
+    return false;
+  }
 }
