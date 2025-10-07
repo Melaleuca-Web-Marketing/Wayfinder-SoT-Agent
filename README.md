@@ -80,12 +80,13 @@ The API layer adds baseline protections so prompt/response handling stays on-bra
 - **Input caps:** messages longer than `MAX_MESSAGE_CHARS` (default 2,000) or containing more than `MAX_MESSAGE_URLS` (default 20) are rejected.
 - **Moderation + scope guard:** prompts flow through `omni-moderation-latest` and a simple keyword scope filter before any model call.
 - **Rate limits:** per-minute (`RATE_LIMIT_PER_MINUTE`, default 10) and per-day (`RATE_LIMIT_PER_DAY`, default 200) throttles via `express-rate-limit`.
-- **Output enforcement:** `ask()` clamps `max_output_tokens` (default 600) and forces a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.
+- **Output enforcement:** `ask()` clamps `max_output_tokens` (default 6,000) while forcing a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.
 
 Tweak the `.env` knobs to adjust these guardrails as you scale.
 
 ## Voice Mode (Realtime API)
 
+- Text chat defaults to GPT-5 (`OPENAI_MODEL`, override as needed).
 - Click **Start voice** in the Chat panel to launch a WebRTC session with the OpenAI Realtime API (`REALTIME_MODEL`, default `gpt-4o-realtime-preview-2024-12-17`).
 - The browser captures microphone input, streams it to the model, and plays synthesized audio replies while streaming transcripts into the existing chat window (including Sources when returned).
 - Use **Stop voice** to end the session; transcripts remain in history alongside typed messages for easy follow-up.

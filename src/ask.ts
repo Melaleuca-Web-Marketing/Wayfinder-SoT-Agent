@@ -21,7 +21,7 @@ export interface ConversationTurn {
 }
 
 const client = new OpenAI({ apiKey: requireApiKey() });
-const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? '600');
+const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? '6000');
 
 function inferTopicHint(message: string): TopicHint {
   const normalized = message.toLowerCase();
@@ -229,7 +229,7 @@ function buildUserMessage(message: string, domainConfig: DomainConfig, historyTr
 }
 
 function stripScheme(url: string): string {
-  return url.replace(/^https?:\/\//, '');
+  return url.replace(/^https?:\/\//, '').replace(/^www\./, '');
 }
 
 function hasSourcesSection(answer: string): boolean {
@@ -321,7 +321,9 @@ function extractSourceEntries(answer: string): string[] {
 function isAllowedSource(url: string, allowedDomains: string[]): boolean {
   try {
     const parsed = new URL(url);
-    const hostPath = `${parsed.hostname}${parsed.pathname}`.replace(/\/$/, '');
+    const hostPath = `${parsed.hostname}${parsed.pathname}`
+      .replace(/^www\./, '')
+      .replace(/\/$/, '');
     return allowedDomains.some((domain) => hostPath.startsWith(stripScheme(domain)));
   } catch {
     return false;
