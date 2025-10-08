@@ -1,6 +1,7 @@
 import OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
 import { requireApiKey, settings, type TopicHint } from './config';
+import type { ResponseInputMessageContentList } from 'openai/resources/responses/responses';
 
 export interface AskParams {
   message: string;
@@ -8,6 +9,7 @@ export interface AskParams {
   vectorStoreIds?: string[];
   model?: string;
   history?: ConversationTurn[];
+  images?: AskImage[];
 }
 
 export interface AskResult {
@@ -18,10 +20,60 @@ export interface AskResult {
 export interface ConversationTurn {
   role: 'user' | 'assistant';
   content: string;
+  images?: ConversationImage[];
+}
+
+export interface ConversationImage {
+  name?: string;
+  mimeType?: string;
+}
+
+export interface AskImage {
+  data: string;
+  mimeType: string;
+  name?: string;
+}
+
+interface ImageInsight {
+  label: string;
+  summary: string;
+  textSnippets: string[];
+  keywords: string[];
 }
 
 const client = new OpenAI({ apiKey: requireApiKey() });
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? '6000');
+const IMAGE_ANALYSIS_MODEL = process.env.IMAGE_ANALYSIS_MODEL ?? 'gpt-4o-mini';
+const IMAGE_ANALYSIS_SCHEMA = {
+  name: 'image_extraction',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['summary', 'visible_text', 'key_terms'],
+    properties: {
+      summary: {
+        type: 'string',
+        description: 'Two concise sentences describing the product and notable claims that are clearly visible.',
+      },
+      visible_text: {
+        type: 'array',
+        description: 'Distinct pieces of text that appear on the product or packaging in the image.',
+        items: {
+          type: 'string',
+        },
+      },
+      key_terms: {
+        type: 'array',
+        description: '2-5 short keywords or phrases useful for searching company documentation about the product.',
+        items: {
+          type: 'string',
+        },
+        minItems: 0,
+        maxItems: 6,
+      },
+    },
+  },
+} as const;
 
 function inferTopicHint(message: string): TopicHint {
   const normalized = message.toLowerCase();
@@ -78,6 +130,9 @@ function buildSystemPrompt(domainConfig: DomainConfig): string {
     `Grounding & citations\n` +
     `- Only synthesize from retrieved sources.\n` +
     `- Always include a Sources section listing exact URLs (or document titles + canonical_id for files).\n\n` +
+    `Image handling\n` +
+    `- If the user uploads images, inspect them first. Extract visible text (product names, claims, numbers) and describe notable visual details.\n` +
+    `- Use insights from the images to drive any necessary web_search or file_search calls so you can cite on-domain evidence. If you cannot corroborate an image-derived fact, say so explicitly.\n\n` +
     `Domain selection heuristics\n` +
     `- Default to "site:${stripScheme(primary)}" in web_search queries.\n` +
     secondaryDirective +
@@ -149,8 +204,9 @@ function extractAssistantMessages(response: Response): string[] {
 
 export async function ask(params: AskParams): Promise<AskResult> {
   const message = params.message.trim();
-  if (!message) {
-    throw new Error('Message must be provided');
+  const hasImages = Array.isArray(params.images) && params.images.length > 0;
+  if (!message && !hasImages) {
+    throw new Error('Message or images must be provided');
   }
 
   const topic = params.topicHint ?? inferTopicHint(message);
@@ -159,7 +215,24 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const tools = buildTools(params.vectorStoreIds);
   const systemPrompt = buildSystemPrompt(domainConfig);
 
+  const imageInsights = hasImages ? await extractImageInsights(params.images ?? [], topic) : [];
   const historyTranscript = formatHistory(params.history ?? []);
+  const userText = message.length > 0 ? message : 'Please review the attached image(s) and provide your findings.';
+
+  const userContent: ResponseInputMessageContentList = [
+    {
+      type: 'input_text',
+      text: buildUserMessage(userText, domainConfig, historyTranscript, params.images, imageInsights),
+    },
+  ];
+
+  for (const image of params.images ?? []) {
+    userContent.push({
+      type: 'input_image',
+      detail: 'high',
+      image_url: `data:${image.mimeType};base64,${image.data}`,
+    });
+  }
 
   const response = await client.responses.create({
     model,
@@ -176,12 +249,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       },
       {
         role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: buildUserMessage(message, domainConfig, historyTranscript),
-          },
-        ],
+        content: userContent,
       },
     ],
     tools,
@@ -191,8 +259,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
     },
   });
 
-  const answerWithSources = ensureSourcesSection(normalizeAnswer(response));
-  const finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig);
+  const answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
+  const finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, params.images, imageInsights);
   if (!hasSourcesSection(answerWithSources)) {
     console.warn('Model response missing Sources section.');
   }
@@ -217,15 +285,34 @@ function normalizeAnswer(response: Response): string {
   return extractFirstMessageText(response);
 }
 
-function buildUserMessage(message: string, domainConfig: DomainConfig, historyTranscript?: string | null): string {
+function buildUserMessage(
+  message: string,
+  domainConfig: DomainConfig,
+  historyTranscript?: string | null,
+  images?: AskImage[] | undefined,
+  insights?: ImageInsight[] | undefined,
+): string {
   const [primaryDomain, secondaryDomain] = domainConfig.preferredDomains;
   const followUp = secondaryDomain
     ? ` If nothing relevant returns, try the next allowlisted domain.`
     : '';
 
+  const insightBlock = formatInsightBlock(insights);
   const conversation = historyTranscript ? `${historyTranscript}\nUser: ${message}` : message;
 
-  return `${conversation}\n\n(Use web_search with site:${stripScheme(primaryDomain)} first.${followUp})`;
+  const attachmentHint = buildAttachmentHint(images);
+  const toolDirective = `(Use web_search with site:${stripScheme(primaryDomain)} first.${followUp})`;
+
+  const sections = [conversation];
+  if (insightBlock) {
+    sections.push(insightBlock);
+  }
+  if (attachmentHint) {
+    sections.push(attachmentHint);
+  }
+  sections.push(toolDirective);
+
+  return sections.join('\n\n');
 }
 
 function stripScheme(url: string): string {
@@ -242,8 +329,35 @@ function formatHistory(history: ConversationTurn[]): string | null {
   }
 
   return history
-    .map((turn) => `${turn.role === 'user' ? 'User' : 'Assistant'}: ${turn.content}`)
+    .map((turn) => {
+      const roleLabel = turn.role === 'user' ? 'User' : 'Assistant';
+      const attachmentLabel = formatAttachmentLabel(turn.images);
+      return attachmentLabel ? `${roleLabel}: ${turn.content} ${attachmentLabel}` : `${roleLabel}: ${turn.content}`;
+    })
     .join('\n');
+}
+
+function formatAttachmentLabel(images: ConversationImage[] | undefined): string {
+  if (!images || images.length === 0) {
+    return '';
+  }
+
+  const names = images.map((image, index) => image.name ?? `image ${index + 1}`);
+  return `(attached ${names.join(', ')})`;
+}
+
+function buildAttachmentHint(images: AskImage[] | undefined): string | null {
+  if (!images || images.length === 0) {
+    return null;
+  }
+
+  const labels = images.map((image, index) => image.name ?? `image ${index + 1}`);
+  return (
+    `Uploaded images: ${labels.join(', ')}.` +
+    '\nFirst, visually analyze every attachment. Extract any readable labels, product names, numbers, or logos, and summarize the imagery before calling tools.' +
+    '\nUse those findings to search melaleuca.com or the vector store so you can cite an on-domain source for every claim.' +
+    '\nIf the user text is ambiguous but the image reveals the product, proceed with the best-supported answer instead of asking for another photo.'
+  );
 }
 
 function extractUrls(answer: string): string[] {
@@ -271,7 +385,7 @@ function extractUrls(answer: string): string[] {
   return Array.from(urls.values());
 }
 
-function ensureSourcesSection(answer: string): string {
+function ensureSourcesSection(answer: string, attachments?: AskImage[] | undefined): string {
   if (!answer.trim()) {
     return answer;
   }
@@ -281,22 +395,39 @@ function ensureSourcesSection(answer: string): string {
   }
 
   const urls = extractUrls(answer);
-  if (urls.length === 0) {
+  if (urls.length === 0 && (!attachments || attachments.length === 0)) {
     return answer;
   }
 
-  const sourcesLines = urls.map((url) => `- ${url}`);
+  const sourcesLines: string[] = [];
+  if (urls.length > 0) {
+    sourcesLines.push(...urls.map((url) => `- ${url}`));
+  }
+
+  if (attachments && attachments.length > 0) {
+    attachments.forEach((attachment, index) => {
+      const label = attachment.name ?? `Uploaded image ${index + 1}`;
+      sourcesLines.push(`- Uploaded image: ${label}`);
+    });
+  }
+
   return `${answer.trim()}\n\nSources:\n${sourcesLines.join('\n')}`;
 }
 
-function enforceSourceAllowlist(answer: string, domainConfig: DomainConfig): string {
+function enforceSourceAllowlist(
+  answer: string,
+  domainConfig: DomainConfig,
+  attachments?: AskImage[] | undefined,
+  insights?: ImageInsight[] | undefined,
+): string {
   const entries = extractSourceEntries(answer);
   const urls = extractUrls(answer);
 
   const hasAllowedUrl = urls.some((url) => isAllowedSource(url, domainConfig.preferredDomains));
   const hasFileCitation = entries.some((entry) => /file-[a-zA-Z0-9]/.test(entry));
+  const hasAttachmentCitation = attachments ? entries.some((entry) => matchesAttachmentEntry(entry, attachments, insights)) : false;
 
-  if (hasAllowedUrl || hasFileCitation) {
+  if (hasAllowedUrl || hasFileCitation || hasAttachmentCitation) {
     return answer;
   }
 
@@ -328,4 +459,158 @@ function isAllowedSource(url: string, allowedDomains: string[]): boolean {
   } catch {
     return false;
   }
+}
+
+function matchesAttachmentEntry(entry: string, attachments: AskImage[], insights?: ImageInsight[] | undefined): boolean {
+  const normalized = entry.toLowerCase();
+  if (!normalized.startsWith('-')) {
+    return false;
+  }
+
+  const insightLabels = insights?.map((insight) => insight.label.toLowerCase()) ?? [];
+
+  if (insightLabels.some((label) => normalized.includes(label))) {
+    return true;
+  }
+
+  return attachments.some((attachment, index) => {
+    const label = (attachment.name ?? `Uploaded image ${index + 1}`).toLowerCase();
+    return normalized.includes(label);
+  });
+}
+
+async function extractImageInsights(images: AskImage[], topic: TopicHint): Promise<ImageInsight[]> {
+  const insights: ImageInsight[] = [];
+  const instructions =
+    'You are an assistant that extracts structured facts from product or marketing photos. ' +
+    'Return concise JSON with fields: "summary" (two short sentences describing the product and notable claims), ' +
+    '"visible_text" (array of distinct text snippets that appear on the packaging), and "key_terms" (array of 2-5 keywords useful for search). ' +
+    'Only include text that is actually visible. Do not hallucinate brand names.';
+
+  for (const [index, image] of images.entries()) {
+    try {
+      const response = await client.responses.create(
+        {
+          model: IMAGE_ANALYSIS_MODEL,
+          max_output_tokens: 700,
+          response_format: {
+            type: 'json_schema',
+            json_schema: IMAGE_ANALYSIS_SCHEMA,
+          },
+          input: [
+            {
+              role: 'system',
+              content: [
+                {
+                  type: 'input_text',
+                  text: instructions,
+                },
+              ],
+            },
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'input_text',
+                  text: `Extract observable details from this image to help identify the product for a ${topic} catalog lookup. Respond with JSON only.`,
+                },
+                {
+                  type: 'input_image',
+                  detail: 'high',
+                  image_url: `data:${image.mimeType};base64,${image.data}`,
+                },
+              ],
+            },
+          ],
+        } as any,
+      );
+
+      const raw = normalizeAnswer(response);
+      const parsed = parseImageInsight(raw);
+      insights.push({
+        label: image.name ?? `Uploaded image ${index + 1}`,
+        summary: parsed.summary,
+        textSnippets: parsed.textSnippets,
+        keywords: parsed.keywords,
+      });
+    } catch (error) {
+      console.warn(`Image analysis failed for attachment ${index}:`, error);
+    }
+  }
+
+  return insights;
+}
+
+function parseImageInsight(value: string): { summary: string; textSnippets: string[]; keywords: string[] } {
+  const fallback = value.trim();
+  if (!fallback) {
+    return { summary: 'No image summary available.', textSnippets: [], keywords: [] };
+  }
+
+  try {
+    const cleaned = stripMarkdownCodeFence(fallback);
+    const data = JSON.parse(cleaned) as {
+      summary?: unknown;
+      visible_text?: unknown;
+      key_terms?: unknown;
+    };
+
+    const summary = typeof data.summary === 'string' && data.summary.trim().length > 0 ? data.summary.trim() : fallback;
+    const textSnippets =
+      Array.isArray(data.visible_text) ?
+        data.visible_text
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0)
+      : [];
+    const keywords =
+      Array.isArray(data.key_terms) ?
+        data.key_terms
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => item.length > 0)
+      : [];
+
+    return { summary, textSnippets, keywords };
+  } catch {
+    return { summary: fallback, textSnippets: [], keywords: [] };
+  }
+}
+
+function stripMarkdownCodeFence(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('```')) {
+    return trimmed;
+  }
+
+  const fenceEnd = trimmed.lastIndexOf('```');
+  if (fenceEnd <= 0) {
+    return trimmed;
+  }
+
+  const firstNewline = trimmed.indexOf('\n');
+  if (firstNewline === -1) {
+    return trimmed;
+  }
+
+  return trimmed.slice(firstNewline + 1, fenceEnd).trim();
+}
+
+function formatInsightBlock(insights: ImageInsight[] | undefined): string | null {
+  if (!insights || insights.length === 0) {
+    return null;
+  }
+
+  const blocks = insights.map((insight, index) => {
+    const lines = [
+      `• Summary: ${insight.summary}`,
+      insight.textSnippets.length > 0 ? `• Visible text: ${insight.textSnippets.join(' | ')}` : null,
+      insight.keywords.length > 0 ? `• Search cues: ${insight.keywords.join(', ')}` : null,
+    ].filter((line): line is string => Boolean(line));
+
+    return `Image ${index + 1} – ${insight.label}\n${lines.join('\n')}`;
+  });
+
+  return (
+    'Vision findings derived from the uploaded image(s). Use them to ground tool calls and answer without re-requesting the label:\n' +
+    `${blocks.join('\n\n')}`
+  );
 }

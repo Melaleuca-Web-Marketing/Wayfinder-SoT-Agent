@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
-import { ask } from './ask';
+import { ask, type AskImage, type ConversationImage } from './ask';
 import {
   getVectorStoreDetails,
   listVectorStoreFiles,
@@ -24,6 +24,14 @@ const PORT = process.env.PORT ? Number(process.env.PORT) : 4001;
 
 const MAX_MESSAGE_CHARS = Number(process.env.MAX_MESSAGE_CHARS ?? '2000');
 const MAX_MESSAGE_URLS = Number(process.env.MAX_MESSAGE_URLS ?? '20');
+const MAX_MESSAGE_IMAGES = Number(process.env.MAX_MESSAGE_IMAGES ?? '3');
+const MAX_IMAGE_BYTES = Number(process.env.MAX_IMAGE_BYTES ?? String(4 * 1024 * 1024));
+const ALLOWED_IMAGE_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+]);
 const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-4o-realtime-preview-2024-12-17';
 const REALTIME_VOICE = process.env.REALTIME_VOICE ?? 'alloy';
 
@@ -42,7 +50,7 @@ const dailyLimiter = rateLimit({
 });
 
 app.use(cors());
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '15mb' }));
 app.use('/api', minuteLimiter, dailyLimiter);
 
 const OUT_OF_SCOPE_PATTERN = /(bitcoin|crypto|stock|forex|gambling|politics|election|movie|music|song|celebrity|programming|python|javascript|java|typescript|code review|weather|sports|football|soccer|nfl|nba)/i;
@@ -61,9 +69,25 @@ app.get('/api/status', async (_req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { message, topicHint, history } = req.body ?? {};
-  if (!message || typeof message !== 'string') {
-    res.status(400).json({ error: 'message is required' });
+  const { message: rawMessage, topicHint, history, images: rawImages } = req.body ?? {};
+
+  if (rawMessage != null && typeof rawMessage !== 'string') {
+    res.status(400).json({ error: 'message must be a string' });
+    return;
+  }
+
+  const message = typeof rawMessage === 'string' ? rawMessage : '';
+
+  let images: AskImage[];
+  try {
+    images = normalizeIncomingImages(rawImages);
+  } catch (error) {
+    res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid images payload.' });
+    return;
+  }
+
+  if (!message.trim() && images.length === 0) {
+    res.status(400).json({ error: 'Provide a message or at least one image.' });
     return;
   }
 
@@ -101,14 +125,8 @@ app.post('/api/chat', async (req, res) => {
     const result = await ask({
       message,
       topicHint,
-      history: Array.isArray(history)
-        ? history
-            .map((item: any) => ({
-              role: item?.role,
-              content: typeof item?.content === 'string' ? item.content : '',
-            }))
-            .filter((item) => item.role === 'user' || item.role === 'assistant')
-        : [],
+      history: sanitizeHistory(history),
+      images,
       vectorStoreIds: [vectorStoreId],
     });
 
@@ -239,4 +257,136 @@ function ensureHttps(domainOrUrl: string): string {
   }
 
   return `https://${domainOrUrl.replace(/^https?:\/\//, '')}`;
+}
+
+function normalizeIncomingImages(rawImages: unknown): AskImage[] {
+  if (rawImages == null) {
+    return [];
+  }
+
+  if (!Array.isArray(rawImages)) {
+    throw new Error('images must be an array.');
+  }
+
+  if (rawImages.length > MAX_MESSAGE_IMAGES) {
+    throw new Error(`Too many images provided. Limit is ${MAX_MESSAGE_IMAGES}.`);
+  }
+
+  return rawImages.map((item, index) => normalizeSingleImage(item, index));
+}
+
+function normalizeSingleImage(item: unknown, index: number): AskImage {
+  if (!item || typeof item !== 'object') {
+    throw new Error(`Image at index ${index} is invalid.`);
+  }
+
+  const { data, mimeType, name } = item as { data?: unknown; mimeType?: unknown; name?: unknown };
+  if (typeof data !== 'string' || data.trim().length === 0) {
+    throw new Error(`Image at index ${index} is missing base64 data.`);
+  }
+
+  if (typeof mimeType !== 'string' || mimeType.trim().length === 0) {
+    throw new Error(`Image at index ${index} is missing mimeType.`);
+  }
+
+  const normalizedMime = mimeType.trim().toLowerCase();
+  if (!ALLOWED_IMAGE_MIME_TYPES.has(normalizedMime)) {
+    throw new Error(`Unsupported image mime type: ${normalizedMime}.`);
+  }
+
+  const base64 = extractBase64Payload(data);
+  const buffer = safeDecodeBase64(base64, index);
+  if (buffer.byteLength === 0) {
+    throw new Error(`Image at index ${index} is empty.`);
+  }
+
+  if (buffer.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error(`Image at index ${index} is too large. Limit is ${Math.round(MAX_IMAGE_BYTES / (1024 * 1024))}MB.`);
+  }
+
+  return {
+    data: base64,
+    mimeType: normalizedMime,
+    name: typeof name === 'string' && name.trim().length > 0 ? name.trim() : undefined,
+  };
+}
+
+function extractBase64Payload(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('data:')) {
+    const commaIndex = trimmed.indexOf(',');
+    if (commaIndex === -1) {
+      throw new Error('Invalid data URL image payload.');
+    }
+    return trimmed.slice(commaIndex + 1).replace(/\s+/g, '');
+  }
+
+  return trimmed.replace(/\s+/g, '');
+}
+
+function safeDecodeBase64(base64: string, index: number): Buffer {
+  try {
+    const buffer = Buffer.from(base64, 'base64');
+    if (buffer.byteLength === 0) {
+      return buffer;
+    }
+
+    const normalized = buffer.toString('base64').replace(/=+$/, '');
+    const original = base64.replace(/=+$/, '');
+    if (normalized !== original) {
+      throw new Error('');
+    }
+
+    return buffer;
+  } catch (error) {
+    throw new Error(`Image at index ${index} is not valid base64.`);
+  }
+}
+
+function sanitizeHistory(rawHistory: unknown): Array<{ role: 'user' | 'assistant'; content: string; images?: ConversationImage[] }> {
+  if (!Array.isArray(rawHistory)) {
+    return [];
+  }
+
+  const entries: Array<{ role: 'user' | 'assistant'; content: string; images?: ConversationImage[] }> = [];
+
+  for (const item of rawHistory) {
+    const role = item?.role;
+    if (role !== 'user' && role !== 'assistant') {
+      continue;
+    }
+
+    const content = typeof item?.content === 'string' ? item.content : '';
+    let images: ConversationImage[] | undefined;
+
+    if (Array.isArray(item?.images)) {
+      const mapped: ConversationImage[] = [];
+      for (const rawImage of item.images as unknown[]) {
+        const name = typeof (rawImage as any)?.name === 'string' && (rawImage as any).name.trim().length > 0 ? (rawImage as any).name.trim() : undefined;
+        const mimeType =
+          typeof (rawImage as any)?.mimeType === 'string' && (rawImage as any).mimeType.trim().length > 0
+            ? (rawImage as any).mimeType.trim()
+            : undefined;
+        if (!name && !mimeType) {
+          continue;
+        }
+        const payload: ConversationImage = {};
+        if (name) {
+          payload.name = name;
+        }
+        if (mimeType) {
+          payload.mimeType = mimeType;
+        }
+        mapped.push(payload);
+      }
+
+      if (mapped.length > 0) {
+        images = mapped;
+      }
+    }
+
+    entries.push({ role, content, images });
+  }
+
+  return entries;
 }

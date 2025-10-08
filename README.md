@@ -71,6 +71,7 @@ Each case asserts that at least one cited URL starts with the required domain. A
 - When the server starts it will look for `VECTOR_STORE_ID` in `.env`. If none is provided it creates a new vector store and caches the ID in `.vector-store.json`.
 - Visit the Documents tab in the UI to upload PDF/Markdown assets. Files are streamed to OpenAI, attached to the vector store, and listed with their indexing status.
 - The Chat tab provides a conversational harness that shares context with the vector store and enforces on-domain sourcing. Every answer ends with a `Sources` block.
+- The Chat tab now supports image attachments—paste or upload up to three screenshots (PNG/JPEG/WebP) per turn to pair vision context with your question.
 - The footer pings the OpenAI API once per minute (and on demand) to confirm connectivity and the active model.
 
 ## Security Guardrails (MVP)
@@ -78,6 +79,7 @@ Each case asserts that at least one cited URL starts with the required domain. A
 The API layer adds baseline protections so prompt/response handling stays on-brand:
 
 - **Input caps:** messages longer than `MAX_MESSAGE_CHARS` (default 2,000) or containing more than `MAX_MESSAGE_URLS` (default 20) are rejected.
+- **Attachment caps:** per-message vision uploads are limited by `MAX_MESSAGE_IMAGES` (default 3) and `MAX_IMAGE_BYTES` (default 4 MB each).
 - **Moderation + scope guard:** prompts flow through `omni-moderation-latest` and a simple keyword scope filter before any model call.
 - **Rate limits:** per-minute (`RATE_LIMIT_PER_MINUTE`, default 10) and per-day (`RATE_LIMIT_PER_DAY`, default 200) throttles via `express-rate-limit`.
 - **Output enforcement:** `ask()` clamps `max_output_tokens` (default 6,000) while forcing a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.

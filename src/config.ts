@@ -20,7 +20,7 @@ export function requireApiKey(): string {
 }
 
 export const settings = {
-  model: process.env.OPENAI_MODEL ?? 'gpt-5',
+  model: process.env.OPENAI_MODEL ?? 'gpt-4.1',
   primaryDomain: process.env.PRIMARY_DOMAIN ?? 'melaleuca.com',
   riverbendDomain: process.env.RIVERBEND_DOMAIN ?? 'melaleuca.com/riverbendranch',
   webCacheTtlSeconds: Number(process.env.WEB_CACHE_TTL_SECONDS ?? '86400'),
