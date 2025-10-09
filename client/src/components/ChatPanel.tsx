@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, FormEvent } from 'react';
+import {
+  sendChatRequest,
+  fetchRealtimeToken,
+  type ChatRequestBody,
+  type ChatResponseBody,
+} from '../../../shared/agentClient';
 
 type Role = 'user' | 'assistant';
 
@@ -25,10 +31,6 @@ interface AttachmentDraft {
   size: number;
   dataUrl: string;
   base64: string;
-}
-
-interface ChatResponse {
-  answer: string;
 }
 
 type VoiceStatus = 'idle' | 'connecting' | 'active';
@@ -283,25 +285,13 @@ export function ChatPanel() {
       setLoading(true);
 
       try {
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message: trimmed,
-            topicHint,
-            history: historyPayload,
-            images: imagePayload,
-          }),
-        });
-
-        if (!response.ok) {
-          const payload = await response.json().catch(() => ({}));
-          throw new Error(payload.error ?? 'Chat request failed');
-        }
-
-        const data = (await response.json()) as ChatResponse;
+        const requestBody: ChatRequestBody = {
+          message: trimmed,
+          topicHint,
+          history: historyPayload,
+          images: imagePayload,
+        };
+        const data: ChatResponseBody = await sendChatRequest(requestBody);
         setMessages([...nextMessages, { id: makeId(), role: 'assistant', content: data.answer }]);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Chat request failed');
@@ -371,7 +361,7 @@ export function ChatPanel() {
       setVoiceError(null);
       setVoiceStatus('connecting');
 
-      const tokenResponse = await fetch('/api/realtime/token', { method: 'POST' });
+      const tokenResponse = await fetchRealtimeToken();
       if (!tokenResponse.ok) {
         const payload = await tokenResponse.json().catch(() => ({}));
         throw new Error(payload.error ?? 'Unable to create realtime session');

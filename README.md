@@ -72,7 +72,24 @@ Each case asserts that at least one cited URL starts with the required domain. A
 - Visit the Documents tab in the UI to upload PDF/Markdown assets. Files are streamed to OpenAI, attached to the vector store, and listed with their indexing status.
 - The Chat tab provides a conversational harness that shares context with the vector store and enforces on-domain sourcing. Every answer ends with a `Sources` block.
 - The Chat tab now supports image attachments—paste or upload up to three screenshots (PNG/JPEG/WebP) per turn to pair vision context with your question.
+- The `widget` package builds a portable Wayfinder popup chat that embeds on marketing sites while riding on the same `/api` backend and vector store. Run `npm run dev --prefix widget` to preview the popup locally.
 - The footer pings the OpenAI API once per minute (and on demand) to confirm connectivity and the active model.
+
+## HTTP API Endpoints
+
+The backend exposes JSON endpoints under `/api` so any client (admin UI, widget, service integration) can share the same agent state.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/status` | Health probe. Returns `{ ok: true, model: "<id>" }` when the OpenAI Responses API is reachable. |
+| `POST` | `/api/chat` | Main chat endpoint. Body: `{ message: string, topicHint?: "melaleuca" \| "riverbend", history?: ConversationTurn[], images?: Base64Image[], vectorStoreIds?: string[] }`. Responds with `{ answer, response }`, where `response` is the raw Responses API payload (including tool calls and citations). |
+| `POST` | `/api/realtime/token` | Creates a short-lived Realtime session for voice calls. The widget/admin UI exchanges the token with the browser Realtime SDK. |
+| `GET` | `/api/vector/store` | Returns the active vector store metadata (`{ id, name, file_count }`). |
+| `GET` | `/api/vector/files` | Lists the most recent files attached to the store with status + error fields. |
+| `POST` | `/api/vector/upload` | Multipart upload (`file` field) for PDFs/Markdown. Streams the document to OpenAI, attaches it to the active vector store, and returns both the OpenAI file id and vector-store-file id. |
+| `DELETE` | `/api/vector/files/:fileId` | Removes a document from the active vector store. |
+
+All endpoints require the same `.env` configuration described earlier (`OPENAI_API_KEY`, vector store settings, rate-limit knobs). During development the admin UI proxies calls to `localhost:4001`, so you can test against these endpoints with tools like `curl` or Postman.
 
 ## Security Guardrails (MVP)
 
@@ -81,7 +98,7 @@ The API layer adds baseline protections so prompt/response handling stays on-bra
 - **Input caps:** messages longer than `MAX_MESSAGE_CHARS` (default 2,000) or containing more than `MAX_MESSAGE_URLS` (default 20) are rejected.
 - **Attachment caps:** per-message vision uploads are limited by `MAX_MESSAGE_IMAGES` (default 3) and `MAX_IMAGE_BYTES` (default 4 MB each).
 - **Moderation + scope guard:** prompts flow through `omni-moderation-latest` and a simple keyword scope filter before any model call.
-- **Rate limits:** per-minute (`RATE_LIMIT_PER_MINUTE`, default 10) and per-day (`RATE_LIMIT_PER_DAY`, default 200) throttles via `express-rate-limit`.
+- **Rate limits:** per-minute (`RATE_LIMIT_PER_MINUTE`, default 10) and per-day (`RATE_LIMIT_PER_DAY`, default 200) throttles via `express-rate-limit`. Set `DISABLE_RATE_LIMITS=true` for internal testing environments.
 - **Output enforcement:** `ask()` clamps `max_output_tokens` (default 6,000) while forcing a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.
 
 Tweak the `.env` knobs to adjust these guardrails as you scale.

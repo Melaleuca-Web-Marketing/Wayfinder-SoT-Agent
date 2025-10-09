@@ -6,12 +6,14 @@
   "scripts": {
     "build:server": "tsc -p tsconfig.json",
     "build:web": "npm run build --prefix client",
-    "build": "npm run build:server && npm run build:web",
+    "build:widget": "npm run build --prefix widget",
+    "build": "npm run build:server && npm run build:web && npm run build:widget",
     "dev:ask": "tsx src/cli.ts",
     "ask": "node dist/src/cli.js",
     "eval": "tsx eval/run_eval.ts",
     "dev:server": "tsx src/server.ts",
     "dev:client": "npm run dev --prefix client",
+    "dev:widget": "npm run dev --prefix widget",
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
     "start": "NODE_ENV=production node dist/src/server.js"
   },

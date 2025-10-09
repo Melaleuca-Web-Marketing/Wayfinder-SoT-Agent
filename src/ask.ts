@@ -150,11 +150,25 @@ type ToolDefinition =
     }
   | {
       type: 'file_search';
-      vector_store_ids: string[];
+      vector_store_ids?: string[];
       max_num_results?: number;
     };
 
-function buildTools(vectorStoreIds: string[] | undefined): ToolDefinition[] {
+interface ToolResources {
+  file_search?: {
+    vector_store_ids: string[];
+  };
+}
+
+interface ToolSetup {
+  tools: ToolDefinition[];
+  toolResources?: ToolResources;
+}
+
+let supportsToolResources = true;
+let useLegacyToolVectorStoreAttachment = false;
+
+function buildTools(vectorStoreIds: string[] | undefined): ToolSetup {
   const tools: ToolDefinition[] = [
     {
       type: 'web_search_preview_2025_03_11',
@@ -163,15 +177,59 @@ function buildTools(vectorStoreIds: string[] | undefined): ToolDefinition[] {
   ];
 
   const stores = vectorStoreIds ?? settings.vectorStoreIds;
-  if (stores.length > 0) {
-    tools.push({
+  const toolResources: ToolResources | undefined =
+    stores.length > 0
+      ? {
+          file_search: {
+            vector_store_ids: stores,
+          },
+        }
+      : undefined;
+
+  if (toolResources?.file_search) {
+    const fileSearchTool: ToolDefinition = {
       type: 'file_search',
-      vector_store_ids: stores,
       max_num_results: 5,
-    });
+    };
+
+    if (useLegacyToolVectorStoreAttachment) {
+      fileSearchTool.vector_store_ids = toolResources.file_search.vector_store_ids;
+    }
+
+    tools.push(fileSearchTool);
   }
 
-  return tools;
+  return { tools, toolResources };
+}
+
+function isUnknownToolResourcesError(error: unknown): boolean {
+  if (!(error instanceof OpenAI.BadRequestError)) {
+    return false;
+  }
+
+  const message = error.message ?? '';
+  if (typeof message !== 'string') {
+    return false;
+  }
+
+  return message.includes("Unknown parameter: 'tool_resources'");
+}
+
+async function createResponseWithTools(
+  requestBase: Record<string, unknown>,
+  setup: ToolSetup,
+  includeToolResources: boolean,
+): Promise<Response> {
+  const payload: Record<string, unknown> = {
+    ...requestBase,
+    tools: setup.tools,
+  };
+
+  if (includeToolResources && setup.toolResources) {
+    payload.tool_resources = setup.toolResources as unknown;
+  }
+
+  return client.responses.create(payload as any);
 }
 
 function extractFirstMessageText(response: Response): string {
@@ -212,7 +270,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const topic = params.topicHint ?? inferTopicHint(message);
   const domainConfig = buildDomainConfig(topic);
   const model = params.model ?? settings.model;
-  const tools = buildTools(params.vectorStoreIds);
+  const toolSetup = buildTools(params.vectorStoreIds);
   const systemPrompt = buildSystemPrompt(domainConfig);
 
   const imageInsights = hasImages ? await extractImageInsights(params.images ?? [], topic) : [];
@@ -234,7 +292,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     });
   }
 
-  const response = await client.responses.create({
+  const requestBase = {
     model,
     max_output_tokens: MAX_OUTPUT_TOKENS,
     input: [
@@ -252,15 +310,31 @@ export async function ask(params: AskParams): Promise<AskResult> {
         content: userContent,
       },
     ],
-    tools,
     metadata: {
       topic_hint: topic,
       primary_domain: domainConfig.preferredDomains[0],
     },
-  });
+  } as const;
+
+  let response: Response;
+
+  try {
+    response = await createResponseWithTools(requestBase, toolSetup, supportsToolResources);
+  } catch (error) {
+    if (supportsToolResources && toolSetup.toolResources && isUnknownToolResourcesError(error)) {
+      console.warn('Responses API does not accept tool_resources. Falling back to legacy vector store attachment.');
+      supportsToolResources = false;
+      useLegacyToolVectorStoreAttachment = true;
+
+      const legacySetup = buildTools(params.vectorStoreIds);
+      response = await createResponseWithTools(requestBase, legacySetup, supportsToolResources);
+    } else {
+      throw error;
+    }
+  }
 
   const answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
-  const finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, params.images, imageInsights);
+  const finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, response, params.images, imageInsights);
   if (!hasSourcesSection(answerWithSources)) {
     console.warn('Model response missing Sources section.');
   }
@@ -417,6 +491,7 @@ function ensureSourcesSection(answer: string, attachments?: AskImage[] | undefin
 function enforceSourceAllowlist(
   answer: string,
   domainConfig: DomainConfig,
+  response: Response,
   attachments?: AskImage[] | undefined,
   insights?: ImageInsight[] | undefined,
 ): string {
@@ -424,7 +499,8 @@ function enforceSourceAllowlist(
   const urls = extractUrls(answer);
 
   const hasAllowedUrl = urls.some((url) => isAllowedSource(url, domainConfig.preferredDomains));
-  const hasFileCitation = entries.some((entry) => /file-[a-zA-Z0-9]/.test(entry));
+  const hasFileCitation =
+    entries.some((entry) => /file-[a-zA-Z0-9]/.test(entry)) || responseContainsFileCitation(response);
   const hasAttachmentCitation = attachments ? entries.some((entry) => matchesAttachmentEntry(entry, attachments, insights)) : false;
 
   if (hasAllowedUrl || hasFileCitation || hasAttachmentCitation) {
@@ -433,6 +509,26 @@ function enforceSourceAllowlist(
 
   const fallback = domainConfig.fallbackUrl;
   return `I couldn't confirm from our site or files. Please check: ${fallback}.\n\nSources:\n- ${fallback}`;
+}
+
+function responseContainsFileCitation(response: Response): boolean {
+  for (const item of response.output ?? []) {
+    if (item.type !== 'message' || item.role !== 'assistant') {
+      continue;
+    }
+
+    for (const piece of item.content ?? []) {
+      if (piece.type !== 'output_text') {
+        continue;
+      }
+
+      if (piece.annotations?.some((annotation) => annotation.type === 'file_citation')) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function extractSourceEntries(answer: string): string[] {
@@ -493,9 +589,11 @@ async function extractImageInsights(images: AskImage[], topic: TopicHint): Promi
         {
           model: IMAGE_ANALYSIS_MODEL,
           max_output_tokens: 700,
-          response_format: {
-            type: 'json_schema',
-            json_schema: IMAGE_ANALYSIS_SCHEMA,
+          text: {
+            format: {
+              type: 'json_schema',
+              json_schema: IMAGE_ANALYSIS_SCHEMA,
+            },
           },
           input: [
             {

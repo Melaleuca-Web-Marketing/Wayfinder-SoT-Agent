@@ -35,23 +35,25 @@ const ALLOWED_IMAGE_MIME_TYPES = new Set([
 const REALTIME_MODEL = process.env.REALTIME_MODEL ?? 'gpt-4o-realtime-preview-2024-12-17';
 const REALTIME_VOICE = process.env.REALTIME_VOICE ?? 'alloy';
 
-const minuteLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: Number(process.env.RATE_LIMIT_PER_MINUTE ?? '10'),
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const dailyLimiter = rateLimit({
-  windowMs: 24 * 60 * 60 * 1000,
-  max: Number(process.env.RATE_LIMIT_PER_DAY ?? '200'),
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
-app.use('/api', minuteLimiter, dailyLimiter);
+if (process.env.DISABLE_RATE_LIMITS !== 'true') {
+  const minuteLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number(process.env.RATE_LIMIT_PER_MINUTE ?? '10'),
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  const dailyLimiter = rateLimit({
+    windowMs: 24 * 60 * 60 * 1000,
+    max: Number(process.env.RATE_LIMIT_PER_DAY ?? '200'),
+    standardHeaders: true,
+    legacyHeaders: false,
+  });
+
+  app.use('/api', minuteLimiter, dailyLimiter);
+}
 
 const OUT_OF_SCOPE_PATTERN = /(bitcoin|crypto|stock|forex|gambling|politics|election|movie|music|song|celebrity|programming|python|javascript|java|typescript|code review|weather|sports|football|soccer|nfl|nba)/i;
 

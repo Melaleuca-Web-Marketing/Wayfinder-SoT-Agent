@@ -1,0 +1,250 @@
+.wayfinder-widget {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  z-index: 2147483647;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.wayfinder-launcher {
+  border: none;
+  border-radius: 999px;
+  padding: 0.75rem 1.25rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: linear-gradient(135deg, #273c75 0%, #40739e 100%);
+  box-shadow: 0 12px 24px rgba(39, 60, 117, 0.28);
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.wayfinder-launcher:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 30px rgba(39, 60, 117, 0.32);
+}
+
+.wayfinder-panel {
+  margin-top: 0.75rem;
+  width: min(360px, calc(100vw - 2rem));
+  max-height: min(640px, calc(100vh - 3rem));
+  border-radius: 1.25rem;
+  background: #ffffff;
+  box-shadow: 0 28px 60px rgba(28, 39, 77, 0.32);
+  border: 1px solid rgba(206, 214, 224, 0.6);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.wayfinder-panel__header {
+  padding: 1rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: linear-gradient(135deg, #1e3799 0%, #4a69bd 100%);
+  color: #ffffff;
+}
+
+.wayfinder-panel__header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.wayfinder-panel__header button {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.wayfinder-panel__body {
+  padding: 1rem 1.25rem;
+  flex: 1;
+  overflow-y: auto;
+  background: #f7f9fc;
+  overscroll-behavior: contain;
+}
+
+.wayfinder-panel__body ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.wayfinder-panel__body li {
+  max-width: 90%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.95rem;
+  line-height: 1.35;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.wayfinder-panel__body li[data-role='user'] {
+  align-self: flex-end;
+  background: #1e3799;
+  color: #ffffff;
+}
+
+.wayfinder-panel__body li[data-role='assistant'] {
+  align-self: flex-start;
+  background: #ffffff;
+  color: #1b2852;
+  border: 1px solid rgba(61, 85, 136, 0.15);
+  box-shadow: 0 8px 18px rgba(58, 73, 118, 0.08);
+}
+
+.wayfinder-panel__footer {
+  padding: 1rem 1.25rem 1.15rem;
+  background: #ffffff;
+  border-top: 1px solid rgba(206, 214, 224, 0.6);
+}
+
+.wayfinder-panel__error {
+  margin: 0 0 0.6rem;
+  color: #c0392b;
+  font-size: 0.85rem;
+}
+
+.wayfinder-panel__footer form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.wayfinder-panel__footer textarea {
+  width: 100%;
+  border-radius: 0.85rem;
+  border: 1px solid rgba(61, 85, 136, 0.2);
+  padding: 0.65rem 0.75rem;
+  font-size: 0.92rem;
+  resize: vertical;
+  min-height: 64px;
+}
+
+.wayfinder-panel__footer button {
+  border: none;
+  cursor: pointer;
+}
+
+.wayfinder-form-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.wayfinder-attach-button {
+  padding: 0.4rem 1rem;
+  border-radius: 999px;
+  background: rgba(30, 55, 153, 0.1);
+  color: #1e3799;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.wayfinder-send-button {
+  align-self: flex-end;
+  border-radius: 999px;
+  padding: 0.55rem 1.35rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #ffffff;
+  background: linear-gradient(135deg, #1e3799 0%, #4a69bd 100%);
+}
+
+.wayfinder-send-button:disabled,
+.wayfinder-attach-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.wayfinder-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.wayfinder-attachments figure {
+  position: relative;
+  margin: 0;
+  width: 96px;
+  border-radius: 0.85rem;
+  overflow: hidden;
+  border: 1px solid rgba(61, 85, 136, 0.2);
+  background: #fff;
+  box-shadow: 0 6px 16px rgba(31, 48, 104, 0.15);
+}
+
+.wayfinder-attachments img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.wayfinder-attachments figcaption {
+  margin: 0;
+  padding: 0.35rem 0.4rem 0.4rem;
+  font-size: 0.7rem;
+  color: #3d5588;
+  text-align: center;
+  background: #f2f4fa;
+  word-break: break-word;
+}
+
+.wayfinder-attachments figure button {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+
+.wayfinder-message__images {
+  margin-top: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.wayfinder-message__images figure {
+  margin: 0;
+  width: 100px;
+  border-radius: 0.8rem;
+  overflow: hidden;
+  border: 1px solid rgba(61, 85, 136, 0.2);
+  background: #ffffff;
+  box-shadow: 0 4px 12px rgba(31, 48, 104, 0.12);
+}
+
+.wayfinder-message__images img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.wayfinder-message__images figcaption {
+  margin: 0;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.7rem;
+  text-align: center;
+  color: #5a648a;
+  background: #f2f4fa;
+  word-break: break-word;
+}
