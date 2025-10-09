@@ -138,7 +138,7 @@ export function DocManager() {
     <section className="doc-manager">
       <header>
         <h2>Vector Store</h2>
-        <button type="button" onClick={() => void fetchData()} disabled={loading}>
+        <button type="button" className="secondary" onClick={() => void fetchData()} disabled={loading}>
           Refresh
         </button>
       </header>
@@ -200,7 +200,7 @@ export function DocManager() {
                   </td>
                   <td>{formatDate(file.created_at)}</td>
                   <td>
-                    <button type="button" onClick={() => void handleDelete(file.id)}>
+                    <button type="button" className="danger" onClick={() => void handleDelete(file.id)}>
                       Remove
                     </button>
                   </td>

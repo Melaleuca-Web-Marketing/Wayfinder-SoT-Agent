@@ -476,11 +476,17 @@ export function ChatPanel() {
               <option value="riverbend">Riverbend Ranch</option>
             </select>
           </label>
-          <button type="button" onClick={handleVoiceToggle} disabled={isVoiceConnecting}>
+          <button
+            type="button"
+            className={isVoiceActive || isVoiceConnecting ? 'danger' : 'secondary'}
+            onClick={handleVoiceToggle}
+            disabled={isVoiceConnecting}
+          >
             {isVoiceActive || isVoiceConnecting ? 'Stop voice' : 'Start voice'}
           </button>
           <button
             type="button"
+            className="secondary"
             onClick={() => {
               setMessages([]);
               setAttachments([]);
@@ -552,7 +558,12 @@ export function ChatPanel() {
         )}
         <div className="chat-form-actions">
           <div className="chat-form-action-group">
-            <button type="button" onClick={handleAttachmentButton} disabled={loading || remainingAttachmentSlots === 0}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={handleAttachmentButton}
+              disabled={loading || remainingAttachmentSlots === 0}
+            >
               Attach image
             </button>
             <span className="chat-form-hint">{remainingAttachmentSlots} slot{remainingAttachmentSlots === 1 ? '' : 's'} left</span>

@@ -14,7 +14,7 @@ export default defineConfig({
   },
   build: {
     lib: {
-      entry: 'src/index.ts',
+      entry: 'src/index.tsx',
       name: 'WayfinderWidget',
       formats: ['es', 'umd'],
       fileName: (format) => `wayfinder-widget.${format}.js`,

@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
 * {
   box-sizing: border-box;
 }
@@ -10,5 +12,5 @@ body,
 
 body {
   margin: 0;
-  background: #f5f6fb;
+  background: #f6f8f9;
 }
