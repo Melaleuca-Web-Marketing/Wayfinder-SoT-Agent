@@ -34,7 +34,7 @@ if (!bundledOutput) {
   throw new Error('Failed to generate serverless bundle.');
 }
 
-const augmentedSource = `${bundledOutput.text}\nconst app = createApp();\nexport default app;\n`;
+const augmentedSource = `${bundledOutput.text}\nconst app = createApp();\nconst handler = (req, res) => app(req, res);\nexport default handler;\n`;
 await writeFile(outFile, augmentedSource, 'utf8');
 
 try {

@@ -414,4 +414,6 @@ function sanitizeHistory(
   return entries;
 }
 
-export default createApp;
+export default function handler(request: express.Request, response: express.Response) {
+  return createApp()(request, response);
+}
