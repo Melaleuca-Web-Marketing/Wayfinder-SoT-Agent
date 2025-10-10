@@ -5,6 +5,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { ask, type AskImage, type ConversationImage } from './ask.js';
 import {
   getVectorStoreDetails,
@@ -15,6 +16,10 @@ import {
   vectorStoreClient,
 } from './vectorStore.js';
 import { settings } from './config.js';
+
+const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+const serverlessClientDir = path.resolve(moduleDir, '..', 'serverless', 'client');
+const defaultClientDistDir = path.resolve('client', 'dist');
 
 const uploadsDirectoryFromEnv = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : undefined;
 const serverlessSafeTmpDir = path.join(process.env.TMPDIR ?? '/tmp', 'uploads');
@@ -232,7 +237,7 @@ export function createApp(): express.Express {
   });
 
   if (process.env.NODE_ENV === 'production') {
-    const clientBuildPath = path.resolve('client', 'dist');
+    const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
     app.use(express.static(clientBuildPath));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(clientBuildPath, 'index.html'));

@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
-import { mkdir } from 'node:fs/promises';
+import { access, cp, mkdir, rm } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -9,7 +10,10 @@ const __dirname = path.dirname(__filename);
 const entryPoint = path.resolve(__dirname, '../src/app.ts');
 const outDir = path.resolve(__dirname, '../dist/serverless');
 const outFile = path.join(outDir, 'app.mjs');
+const clientDist = path.resolve(__dirname, '../client/dist');
+const serverlessClientDir = path.join(outDir, 'client');
 
+await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 
 await build({
@@ -23,5 +27,17 @@ await build({
   sourcemap: false,
   logLevel: process.env.ESBUILD_LOG_LEVEL ?? 'info',
 });
+
+try {
+  await access(clientDist, fsConstants.F_OK);
+  await cp(clientDist, serverlessClientDir, { recursive: true });
+  console.log(`Copied client assets -> ${path.relative(process.cwd(), serverlessClientDir)}`);
+} catch (error) {
+  if ((error?.code ?? '') === 'ENOENT') {
+    console.warn('Client build output not found; skipping copy to serverless bundle.');
+  } else {
+    throw error;
+  }
+}
 
 console.log(`Bundled serverless entry -> ${path.relative(process.cwd(), outFile)}`);
