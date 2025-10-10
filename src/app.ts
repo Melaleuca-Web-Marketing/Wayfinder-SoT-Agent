@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
-import { ask, type AskImage, type ConversationImage } from './ask';
+import { ask, type AskImage, type ConversationImage } from './ask.js';
 import {
   getVectorStoreDetails,
   listVectorStoreFiles,
@@ -13,8 +13,8 @@ import {
   deleteVectorStoreFile,
   ensureVectorStoreId,
   vectorStoreClient,
-} from './vectorStore';
-import { settings } from './config';
+} from './vectorStore.js';
+import { settings } from './config.js';
 
 const uploadsDirectoryFromEnv = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : undefined;
 const serverlessSafeTmpDir = path.join(process.env.TMPDIR ?? '/tmp', 'uploads');

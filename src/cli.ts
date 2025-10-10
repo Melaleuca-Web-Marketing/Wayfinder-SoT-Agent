@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { ask } from './ask';
-import type { TopicHint } from './config';
+import { ask } from './ask.js';
+import type { TopicHint } from './config.js';
 
 function parseArgs(argv: string[]): { message: string; topicHint?: TopicHint } {
   const args = [...argv];

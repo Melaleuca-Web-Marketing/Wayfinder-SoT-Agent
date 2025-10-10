@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import OpenAI from 'openai';
-import { requireApiKey, settings } from './config';
+import { requireApiKey, settings } from './config.js';
 
 const client = new OpenAI({ apiKey: requireApiKey() });
 const metaFile = path.resolve('.vector-store.json');

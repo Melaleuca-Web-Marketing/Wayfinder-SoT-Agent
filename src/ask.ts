@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import type { Response } from 'openai/resources/responses/responses';
-import { requireApiKey, settings, type TopicHint } from './config';
+import { requireApiKey, settings, type TopicHint } from './config.js';
 import type { ResponseInputMessageContentList } from 'openai/resources/responses/responses';
 
 export interface AskParams {

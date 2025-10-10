@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { ask } from '../src/ask';
-import type { TopicHint } from '../src/config';
+import { ask } from '../src/ask.js';
+import type { TopicHint } from '../src/config.js';
 
 interface GoldenCase {
   q: string;
