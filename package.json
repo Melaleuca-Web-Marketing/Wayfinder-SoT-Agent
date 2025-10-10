@@ -15,7 +15,8 @@
     "dev:client": "npm run dev --prefix client",
     "dev:widget": "npm run dev --prefix widget",
     "dev": "concurrently -k \"npm:dev:server\" \"npm:dev:client\"",
-    "start": "NODE_ENV=production node dist/src/server.js"
+    "start": "NODE_ENV=production node dist/src/server.js",
+    "postinstall": "npm install --prefix client && npm install --prefix widget"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",
