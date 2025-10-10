@@ -1,11 +1,5 @@
 {
   "buildCommand": "npm run build",
-  "functions": {
-    "api/index.mjs": {
-      "runtime": "nodejs18.x",
-      "includeFiles": "dist/serverless/**"
-    }
-  },
   "rewrites": [
     {
       "source": "/api/(.*)",
