@@ -1,4 +1,4 @@
-import { createApp } from '../dist/src/app.js';
+import { createApp } from '../dist/serverless/app.mjs';
 
 const app = createApp();
 
