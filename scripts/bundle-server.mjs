@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { access, cp, mkdir, rm } from 'node:fs/promises';
+import { access, cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,7 @@ const serverlessClientDir = path.join(outDir, 'client');
 await rm(outDir, { recursive: true, force: true });
 await mkdir(outDir, { recursive: true });
 
-await build({
+const buildResult = await build({
   entryPoints: [entryPoint],
   bundle: true,
   format: 'esm',
@@ -26,7 +26,16 @@ await build({
   packages: 'external',
   sourcemap: false,
   logLevel: process.env.ESBUILD_LOG_LEVEL ?? 'info',
+  write: false,
 });
+
+const bundledOutput = buildResult.outputFiles?.[0];
+if (!bundledOutput) {
+  throw new Error('Failed to generate serverless bundle.');
+}
+
+const augmentedSource = `${bundledOutput.text}\nconst app = createApp();\nexport default app;\n`;
+await writeFile(outFile, augmentedSource, 'utf8');
 
 try {
   await access(clientDist, fsConstants.F_OK);
