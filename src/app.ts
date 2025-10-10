@@ -240,7 +240,7 @@ export function createApp(): express.Express {
   if (process.env.NODE_ENV === 'production') {
     const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
     app.use(express.static(clientBuildPath));
-    app.get('*', (_req, res) => {
+    app.get('/*', (_req, res) => {
       res.sendFile(path.join(clientBuildPath, 'index.html'));
     });
   }
@@ -414,6 +414,4 @@ function sanitizeHistory(
   return entries;
 }
 
-export default function handler(request: express.Request, response: express.Response) {
-  return createApp()(request, response);
-}
+export default createApp;
