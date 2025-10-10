@@ -34,7 +34,12 @@ if (!bundledOutput) {
   throw new Error('Failed to generate serverless bundle.');
 }
 
-const augmentedSource = `${bundledOutput.text}\nconst app = createApp();\nconst handler = (req, res) => app(req, res);\nexport default handler;\n`;
+let source = bundledOutput.text.replace(
+  /export\s*\{\s*createApp,\s*app_default as default\s*\};/,
+  'export { createApp };',
+);
+
+const augmentedSource = `${source}\nconst app = createApp();\nconst handler = (req, res) => app(req, res);\nexport default handler;\n`;
 await writeFile(outFile, augmentedSource, 'utf8');
 
 try {
