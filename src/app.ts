@@ -16,8 +16,16 @@ import {
 } from './vectorStore';
 import { settings } from './config';
 
-const uploadsDir = path.resolve('.uploads');
-fsSync.mkdirSync(uploadsDir, { recursive: true });
+const uploadsDirectoryFromEnv = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : undefined;
+const serverlessSafeTmpDir = path.join(process.env.TMPDIR ?? '/tmp', 'uploads');
+const localUploadsDir = path.resolve('.uploads');
+const uploadsDir = uploadsDirectoryFromEnv ?? (process.env.VERCEL ? serverlessSafeTmpDir : localUploadsDir);
+
+try {
+  fsSync.mkdirSync(uploadsDir, { recursive: true });
+} catch (error) {
+  console.warn(`Unable to create uploads directory at ${uploadsDir}:`, error);
+}
 const upload = multer({ dest: uploadsDir });
 
 const MAX_MESSAGE_CHARS = Number(process.env.MAX_MESSAGE_CHARS ?? '2000');
