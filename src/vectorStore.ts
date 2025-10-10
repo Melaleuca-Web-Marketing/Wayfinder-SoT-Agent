@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
-import OpenAI from 'openai';
+import { OpenAI, toFile } from 'openai';
 import { requireApiKey, settings } from './config.js';
 
 const client = new OpenAI({ apiKey: requireApiKey() });
@@ -53,7 +53,8 @@ export async function getVectorStoreDetails() {
 export async function listVectorStoreFiles() {
   const id = await ensureVectorStoreId();
   const files = await client.vectorStores.files.list(id, { limit: 50 });
-  return files.data.map((file) => ({
+  type VectorStoreListFile = (typeof files.data)[number];
+  return files.data.map((file: VectorStoreListFile) => ({
     id: file.id,
     status: file.status,
     name: (file.attributes?.filename as string | undefined) ?? file.id,
@@ -65,7 +66,7 @@ export async function listVectorStoreFiles() {
 export async function uploadFileToVectorStore(localPath: string, filename: string) {
   const id = await ensureVectorStoreId();
   const file = await client.files.create({
-    file: await OpenAI.toFile(createReadStream(localPath), filename),
+    file: await toFile(createReadStream(localPath), filename),
     purpose: 'assistants',
   });
 
