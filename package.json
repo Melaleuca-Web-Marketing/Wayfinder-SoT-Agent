@@ -4,7 +4,7 @@
   "description": "Melaleuca web-first RAG tool built with the OpenAI Responses API and tool calls.",
   "type": "module",
   "scripts": {
-    "build:server": "tsc -p tsconfig.json",
+    "build:server": "rm -rf dist && tsc -p tsconfig.json",
     "build:web": "npm run build --prefix client",
     "build:widget": "npm run build --prefix widget",
     "build": "npm run build:server && npm run build:web && npm run build:widget",

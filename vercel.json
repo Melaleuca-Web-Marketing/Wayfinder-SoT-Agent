@@ -2,6 +2,7 @@
   "buildCommand": "npm run build",
   "functions": {
     "api/index.mjs": {
+      "runtime": "nodejs18.x",
       "includedFiles": [
         "dist/**",
         "client/dist/**"
@@ -9,7 +10,13 @@
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index.mjs" },
-    { "source": "/(.*)", "destination": "/api/index.mjs" }
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.mjs"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/api/index.mjs"
+    }
   ]
 }
