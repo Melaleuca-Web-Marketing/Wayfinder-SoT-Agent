@@ -1,0 +1,15 @@
+{
+  "buildCommand": "npm run build",
+  "functions": {
+    "api/index.mjs": {
+      "includedFiles": [
+        "dist/**",
+        "client/dist/**"
+      ]
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/index.mjs" },
+    { "source": "/(.*)", "destination": "/api/index.mjs" }
+  ]
+}
