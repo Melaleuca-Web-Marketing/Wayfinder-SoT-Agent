@@ -243,7 +243,7 @@ export function createApp(): express.Express {
     app.get('/', (_req, res) => {
       res.sendFile(path.join(clientBuildPath, 'index.html'));
     });
-    app.get('/(.*)', (_req, res) => {
+    app.get(/.*/, (_req, res) => {
       res.sendFile(path.join(clientBuildPath, 'index.html'));
     });
   }
