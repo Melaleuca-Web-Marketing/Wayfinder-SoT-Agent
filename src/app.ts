@@ -413,3 +413,5 @@ function sanitizeHistory(
 
   return entries;
 }
+
+export default createApp;
