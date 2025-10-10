@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
-import rateLimit from 'express-rate-limit';
+import { rateLimit } from 'express-rate-limit';
 import path from 'node:path';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
@@ -130,7 +130,8 @@ export function createApp(): express.Express {
         input: message,
       });
 
-      const flagged = moderation.results?.some((result) => result.flagged) ?? false;
+      const flagged =
+        moderation.results?.some((result: { flagged?: boolean }) => result.flagged === true) ?? false;
       if (flagged) {
         res.status(200).json({
           answer: "I'm sorry, but I can’t help with that request.",
