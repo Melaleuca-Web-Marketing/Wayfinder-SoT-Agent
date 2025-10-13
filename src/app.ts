@@ -259,6 +259,10 @@ export function createApp(): express.Express {
 
   if (process.env.VERCEL) {
     const clientBuildPath = serverlessClientDir;
+
+    console.log(`[app] vercel serving static assets from ${clientBuildPath}`);
+    app.use(express.static(clientBuildPath, { index: false }));
+
     app.get('/', (_req, res) => {
       const indexPath = path.join(clientBuildPath, 'index.html');
       res.sendFile(indexPath, (error) => {
@@ -269,7 +273,7 @@ export function createApp(): express.Express {
       });
     });
 
-    app.get(/^\/(?!api|assets).*/, (_req, res) => {
+    app.get(/^\/(?!api).*/, (_req, res) => {
       const indexPath = path.join(clientBuildPath, 'index.html');
       res.sendFile(indexPath, (error) => {
         if (error) {
