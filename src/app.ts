@@ -237,7 +237,7 @@ export function createApp(): express.Express {
     res.status(404).json({ error: 'Not found' });
   });
 
-  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
+  if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
     const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
 
     console.log(`[app] serving static files from ${clientBuildPath}`);
@@ -255,6 +255,29 @@ export function createApp(): express.Express {
 
     app.get('/', sendIndexHtml);
     app.get(/.*/, sendIndexHtml);
+  }
+
+  if (process.env.VERCEL) {
+    const clientBuildPath = serverlessClientDir;
+    app.get('/', (_req, res) => {
+      const indexPath = path.join(clientBuildPath, 'index.html');
+      res.sendFile(indexPath, (error) => {
+        if (error) {
+          console.error('[app] vercel index send error', error);
+          res.status(500).send('Failed to load application.');
+        }
+      });
+    });
+
+    app.get(/^\/(?!api|assets).*/, (_req, res) => {
+      const indexPath = path.join(clientBuildPath, 'index.html');
+      res.sendFile(indexPath, (error) => {
+        if (error) {
+          console.error('[app] vercel spa fallback error', error);
+          res.status(500).send('Failed to load application.');
+        }
+      });
+    });
   }
 
   return app;

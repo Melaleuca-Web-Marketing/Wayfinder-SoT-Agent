@@ -5,15 +5,18 @@
       "maxDuration": 30
     }
   },
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/:path*",
-      "destination": "/api/index.mjs"
+      "src": "/assets/(.*)",
+      "dest": "/dist/serverless/client/assets/$1"
     },
     {
-      "source": "/:path((?!assets).*)",
-      "destination": "/api/index.mjs"
+      "src": "/api/(.*)",
+      "dest": "/api/index.mjs"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.mjs"
     }
-  ],
-  "outputDirectory": "dist/serverless/client"
+  ]
 }
