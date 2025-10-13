@@ -54,4 +54,18 @@ try {
   }
 }
 
+const demoDir = path.resolve(__dirname, '../demo');
+const serverlessDemoDir = path.join(outDir, 'demo');
+try {
+  await access(demoDir, fsConstants.F_OK);
+  await cp(demoDir, serverlessDemoDir, { recursive: true });
+  console.log(`Copied demo assets -> ${path.relative(process.cwd(), serverlessDemoDir)}`);
+} catch (error) {
+  if ((error?.code ?? '') === 'ENOENT') {
+    console.warn('Demo directory not found; skipping copy to serverless bundle.');
+  } else {
+    throw error;
+  }
+}
+
 console.log(`Bundled serverless entry -> ${path.relative(process.cwd(), outFile)}`);

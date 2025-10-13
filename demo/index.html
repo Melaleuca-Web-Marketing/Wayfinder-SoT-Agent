@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wayfinder Widget Demo</title>
+    <link rel="stylesheet" href="/demo/assets/widget.css">
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background-image: url('/demo/assets/www.melaleuca.com_.png');
+        background-size: cover;
+        background-position: center;
+        background-repeat: no-repeat;
+        position: relative;
+      }
+
+      #wayfinder-widget {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 1000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="wayfinder-widget"></div>
+
+    <script src="/demo/assets/wayfinder-widget.umd.js"></script>
+    <script>
+      // Initialize the widget
+      if (window.WayfinderWidget && window.WayfinderWidget.renderWayfinderWidget) {
+        window.WayfinderWidget.renderWayfinderWidget(
+          document.getElementById('wayfinder-widget'),
+          {
+            apiUrl: '/api'
+          }
+        );
+      }
+    </script>
+  </body>
+</html>

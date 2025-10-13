@@ -19,7 +19,9 @@ import { settings } from './config.js';
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const serverlessClientDir = path.resolve(moduleDir, '..', 'serverless', 'client');
+const serverlessDemoDir = path.resolve(moduleDir, '..', 'serverless', 'demo');
 const defaultClientDistDir = path.resolve('client', 'dist');
+const defaultDemoDir = path.resolve('demo');
 
 const uploadsDirectoryFromEnv = process.env.UPLOADS_DIR ? path.resolve(process.env.UPLOADS_DIR) : undefined;
 const serverlessSafeTmpDir = path.join(process.env.TMPDIR ?? '/tmp', 'uploads');
@@ -236,6 +238,12 @@ export function createApp(): express.Express {
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'Not found' });
   });
+
+  const demoDir = fsSync.existsSync(serverlessDemoDir) ? serverlessDemoDir : defaultDemoDir;
+  if (fsSync.existsSync(demoDir)) {
+    console.log(`[app] serving demo files from ${demoDir}`);
+    app.use('/demo', express.static(demoDir));
+  }
 
   if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
     const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
