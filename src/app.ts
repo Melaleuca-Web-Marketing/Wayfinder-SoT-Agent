@@ -253,8 +253,17 @@ export function createApp(): express.Express {
 
     const sendIndexHtml = (_req: express.Request, res: express.Response) => {
       if (cachedIndexHtml != null) {
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.send(cachedIndexHtml);
+        try {
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': Buffer.byteLength(cachedIndexHtml, 'utf8').toString(),
+          });
+          res.end(cachedIndexHtml);
+        } catch (error) {
+          console.error('[app] cached index send error', error);
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Failed to load application.');
+        }
         return;
       }
 
