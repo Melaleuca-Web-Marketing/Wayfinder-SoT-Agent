@@ -241,10 +241,22 @@ export function createApp(): express.Express {
     const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
     app.use(express.static(clientBuildPath));
     app.get('/', (_req, res) => {
-      res.sendFile(path.join(clientBuildPath, 'index.html'));
+      const indexPath = path.join(clientBuildPath, 'index.html');
+      console.log(`[app] sending index from ${indexPath}`);
+      res.sendFile(indexPath, (error) => {
+        if (error) {
+          console.error('[app] index send error', error);
+        }
+      });
     });
     app.get(/.*/, (_req, res) => {
-      res.sendFile(path.join(clientBuildPath, 'index.html'));
+      const indexPath = path.join(clientBuildPath, 'index.html');
+      console.log(`[app] sending catch-all index from ${indexPath}`);
+      res.sendFile(indexPath, (error) => {
+        if (error) {
+          console.error('[app] catch-all index error', error);
+        }
+      });
     });
   }
 
