@@ -239,7 +239,7 @@ export function createApp(): express.Express {
 
   if (process.env.NODE_ENV === 'production') {
     const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
-    app.use(express.static(clientBuildPath));
+    app.use(express.static(clientBuildPath, { index: false }));
     app.get('/', (_req, res) => {
       const indexPath = path.join(clientBuildPath, 'index.html');
       console.log(`[app] sending index from ${indexPath}`);
