@@ -12,6 +12,9 @@ export default defineConfig({
       },
     },
   },
+  define: {
+    'process.env': {},
+  },
   build: {
     lib: {
       entry: 'src/index.tsx',
@@ -20,12 +23,9 @@ export default defineConfig({
       fileName: (format) => `wayfinder-widget.${format}.js`,
     },
     rollupOptions: {
-      external: ['react', 'react-dom'],
+      external: [],
       output: {
-        globals: {
-          react: 'React',
-          'react-dom': 'ReactDOM',
-        },
+        globals: {},
       },
     },
   },

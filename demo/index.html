@@ -38,12 +38,18 @@
     <script>
       // Initialize the widget
       if (window.WayfinderWidget && window.WayfinderWidget.renderWayfinderWidget) {
-        window.WayfinderWidget.renderWayfinderWidget(
-          document.getElementById('wayfinder-widget'),
-          {
-            apiUrl: '/api'
-          }
-        );
+        try {
+          window.WayfinderWidget.renderWayfinderWidget(
+            document.getElementById('wayfinder-widget'),
+            {
+              apiUrl: '/api'
+            }
+          );
+        } catch (error) {
+          console.error('Failed to initialize widget:', error);
+        }
+      } else {
+        console.error('WayfinderWidget not found on window');
       }
     </script>
   </body>
