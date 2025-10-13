@@ -7,12 +7,13 @@
   },
   "rewrites": [
     {
-      "source": "/api/(.*)",
+      "source": "/api/:path*",
       "destination": "/api/index.mjs"
     },
     {
-      "source": "/(.*)",
+      "source": "/:path((?!assets).*)",
       "destination": "/api/index.mjs"
     }
-  ]
+  ],
+  "outputDirectory": "dist/serverless/client"
 }
