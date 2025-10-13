@@ -237,39 +237,18 @@ export function createApp(): express.Express {
     res.status(404).json({ error: 'Not found' });
   });
 
-  if (process.env.NODE_ENV === 'production') {
+  if (process.env.NODE_ENV === 'production' || process.env.VERCEL) {
     const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
-    const indexPath = path.join(clientBuildPath, 'index.html');
-    let cachedIndexHtml: string | null = null;
 
-    try {
-      cachedIndexHtml = fsSync.readFileSync(indexPath, 'utf8');
-      console.log(`[app] cached index html from ${indexPath}`);
-    } catch (error) {
-      console.error('[app] unable to read index.html at startup', error);
-    }
-
+    console.log(`[app] serving static files from ${clientBuildPath}`);
     app.use(express.static(clientBuildPath, { index: false }));
 
     const sendIndexHtml = (_req: express.Request, res: express.Response) => {
-      if (cachedIndexHtml != null) {
-        try {
-          res.writeHead(200, {
-            'Content-Type': 'text/html; charset=utf-8',
-            'Content-Length': Buffer.byteLength(cachedIndexHtml, 'utf8').toString(),
-          });
-          res.end(cachedIndexHtml);
-        } catch (error) {
-          console.error('[app] cached index send error', error);
-          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-          res.end('Failed to load application.');
-        }
-        return;
-      }
-
+      const indexPath = path.join(clientBuildPath, 'index.html');
       res.sendFile(indexPath, (error) => {
         if (error) {
           console.error('[app] index send error', error);
+          res.status(500).send('Failed to load application.');
         }
       });
     };
