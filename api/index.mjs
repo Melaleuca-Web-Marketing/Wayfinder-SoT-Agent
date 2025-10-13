@@ -1,5 +1,10 @@
 import { createApp } from '../dist/serverless/app.mjs';
 
-const app = createApp();
+let app;
 
-export default app;
+export default function handler(req, res) {
+  if (!app) {
+    app = createApp();
+  }
+  return app(req, res);
+}
