@@ -239,25 +239,34 @@ export function createApp(): express.Express {
 
   if (process.env.NODE_ENV === 'production') {
     const clientBuildPath = fsSync.existsSync(serverlessClientDir) ? serverlessClientDir : defaultClientDistDir;
+    const indexPath = path.join(clientBuildPath, 'index.html');
+    let cachedIndexHtml: string | null = null;
+
+    try {
+      cachedIndexHtml = fsSync.readFileSync(indexPath, 'utf8');
+      console.log(`[app] cached index html from ${indexPath}`);
+    } catch (error) {
+      console.error('[app] unable to read index.html at startup', error);
+    }
+
     app.use(express.static(clientBuildPath, { index: false }));
-    app.get('/', (_req, res) => {
-      const indexPath = path.join(clientBuildPath, 'index.html');
-      console.log(`[app] sending index from ${indexPath}`);
+
+    const sendIndexHtml = (_req: express.Request, res: express.Response) => {
+      if (cachedIndexHtml != null) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(cachedIndexHtml);
+        return;
+      }
+
       res.sendFile(indexPath, (error) => {
         if (error) {
           console.error('[app] index send error', error);
         }
       });
-    });
-    app.get(/.*/, (_req, res) => {
-      const indexPath = path.join(clientBuildPath, 'index.html');
-      console.log(`[app] sending catch-all index from ${indexPath}`);
-      res.sendFile(indexPath, (error) => {
-        if (error) {
-          console.error('[app] catch-all index error', error);
-        }
-      });
-    });
+    };
+
+    app.get('/', sendIndexHtml);
+    app.get(/.*/, sendIndexHtml);
   }
 
   return app;
