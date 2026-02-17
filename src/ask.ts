@@ -10,6 +10,7 @@ export interface AskParams {
   model?: string;
   history?: ConversationTurn[];
   images?: AskImage[];
+  previousResponseId?: string;
 }
 
 export interface AskResult {
@@ -112,6 +113,61 @@ function ensureHttps(domainOrUrl: string): string {
   return `https://${domainOrUrl.replace(/^https?:\/\//, '')}`;
 }
 
+function toAllowedDomains(domains: string[]): string[] {
+  const allowed = new Set<string>();
+  for (const domain of domains) {
+    const trimmed = domain.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    try {
+      const url = new URL(ensureHttps(trimmed));
+      const host = url.hostname.replace(/^www\./, '');
+      if (host) {
+        allowed.add(host);
+      }
+      continue;
+    } catch {
+      // Fall back to a conservative parse if it's not a valid URL.
+    }
+
+    const normalized = stripScheme(trimmed).split('/')[0].trim();
+    if (normalized) {
+      allowed.add(normalized);
+    }
+  }
+
+  return Array.from(allowed.values());
+}
+
+function buildUserLocation():
+  | {
+      type: 'approximate';
+      country?: string;
+      region?: string;
+      city?: string;
+      timezone?: string;
+    }
+  | undefined {
+  const country = settings.webSearchCountry?.trim();
+  const region = settings.webSearchRegion?.trim();
+  const city = settings.webSearchCity?.trim();
+  const timezone = settings.webSearchTimezone?.trim();
+
+  if (!country && !region && !city && !timezone) {
+    return undefined;
+  }
+
+  return {
+    type: 'approximate',
+    ...(country ? { country } : {}),
+    ...(region ? { region } : {}),
+    ...(city ? { city } : {}),
+    ...(timezone ? { timezone } : {}),
+  };
+}
+
 function buildSystemPrompt(domainConfig: DomainConfig): string {
   const [primary, secondary] = domainConfig.preferredDomains;
   const fallbackUrl = domainConfig.fallbackUrl;
@@ -145,8 +201,18 @@ function buildSystemPrompt(domainConfig: DomainConfig): string {
 
 type ToolDefinition =
   | {
-      type: 'web_search_preview' | 'web_search_preview_2025_03_11';
+      type: 'web_search' | 'web_search_2025_08_26';
       search_context_size?: 'low' | 'medium' | 'high';
+      filters?: {
+        allowed_domains?: string[];
+      };
+      user_location?: {
+        type: 'approximate';
+        country?: string;
+        region?: string;
+        city?: string;
+        timezone?: string;
+      };
     }
   | {
       type: 'file_search';
@@ -168,11 +234,18 @@ interface ToolSetup {
 let supportsToolResources = true;
 let useLegacyToolVectorStoreAttachment = false;
 
-function buildTools(vectorStoreIds: string[] | undefined): ToolSetup {
+function buildTools(vectorStoreIds: string[] | undefined, domainConfig: DomainConfig): ToolSetup {
+  const allowedDomains =
+    settings.webSearchAllowedDomains && settings.webSearchAllowedDomains.length > 0 ?
+      settings.webSearchAllowedDomains
+    : toAllowedDomains(domainConfig.preferredDomains);
+  const userLocation = buildUserLocation();
   const tools: ToolDefinition[] = [
     {
-      type: 'web_search_preview_2025_03_11',
+      type: 'web_search',
       search_context_size: 'medium',
+      ...(allowedDomains.length > 0 ? { filters: { allowed_domains: allowedDomains } } : {}),
+      ...(userLocation ? { user_location: userLocation } : {}),
     },
   ];
 
@@ -270,11 +343,11 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const topic = params.topicHint ?? inferTopicHint(message);
   const domainConfig = buildDomainConfig(topic);
   const model = params.model ?? settings.model;
-  const toolSetup = buildTools(params.vectorStoreIds);
+  const toolSetup = buildTools(params.vectorStoreIds, domainConfig);
   const systemPrompt = buildSystemPrompt(domainConfig);
 
   const imageInsights = hasImages ? await extractImageInsights(params.images ?? [], topic) : [];
-  const historyTranscript = formatHistory(params.history ?? []);
+  const historyTranscript = params.previousResponseId ? null : formatHistory(params.history ?? []);
   const userText = message.length > 0 ? message : 'Please review the attached image(s) and provide your findings.';
 
   const userContent: ResponseInputMessageContentList = [
@@ -295,6 +368,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const requestBase = {
     model,
     max_output_tokens: MAX_OUTPUT_TOKENS,
+    include: ['web_search_call.action.sources', 'file_search_call.results'],
     input: [
       {
         role: 'system',
@@ -314,6 +388,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       topic_hint: topic,
       primary_domain: domainConfig.preferredDomains[0],
     },
+    ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
   } as const;
 
   let response: Response;
@@ -326,7 +401,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       supportsToolResources = false;
       useLegacyToolVectorStoreAttachment = true;
 
-      const legacySetup = buildTools(params.vectorStoreIds);
+      const legacySetup = buildTools(params.vectorStoreIds, domainConfig);
       response = await createResponseWithTools(requestBase, legacySetup, supportsToolResources);
     } else {
       throw error;

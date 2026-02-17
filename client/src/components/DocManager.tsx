@@ -11,6 +11,7 @@ interface VectorStoreFile {
   id: string;
   status: string;
   name: string;
+  source_url?: string | null;
   created_at: number | null;
   last_error: string | null;
 }
@@ -28,7 +29,9 @@ export function DocManager() {
   const [files, setFiles] = useState<VectorStoreFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [urlUploading, setUrlUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [urlInput, setUrlInput] = useState('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -98,6 +101,39 @@ export function DocManager() {
     }
   };
 
+  const handleUrlUpload: FormEventHandler<HTMLFormElement> = async (event) => {
+    event.preventDefault();
+    const url = urlInput.trim();
+
+    if (!url) {
+      setError('Please enter a URL to add.');
+      return;
+    }
+
+    setUrlUploading(true);
+    setError(null);
+
+    try {
+      const res = await fetch('/api/vector/url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error ?? 'URL upload failed');
+      }
+
+      setUrlInput('');
+      await fetchData();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'URL upload failed');
+    } finally {
+      setUrlUploading(false);
+    }
+  };
+
   const handleDelete = useCallback(
     async (fileId: string) => {
       if (!confirm('Remove this file from the vector store?')) {
@@ -162,10 +198,28 @@ export function DocManager() {
       <form className="upload-form" onSubmit={handleUpload}>
         <label className="file-input">
           <span>Upload PDF or Markdown</span>
-          <input type="file" name="file" accept=".pdf,.md,.txt" required disabled={uploading} />
+          <input type="file" name="file" accept=".pdf,.md,.txt" required disabled={uploading || urlUploading} />
         </label>
-        <button type="submit" disabled={uploading}>
+        <button type="submit" disabled={uploading || urlUploading}>
           {uploading ? 'Uploading…' : 'Upload'}
+        </button>
+      </form>
+
+      <form className="upload-form" onSubmit={handleUrlUpload}>
+        <label className="url-input">
+          <span>Add URL</span>
+          <input
+            type="url"
+            name="url"
+            placeholder="https://www.melaleuca.com/..."
+            value={urlInput}
+            onChange={(event) => setUrlInput(event.target.value)}
+            disabled={urlUploading || uploading}
+            required
+          />
+        </label>
+        <button type="submit" disabled={urlUploading || uploading}>
+          {urlUploading ? 'Adding…' : 'Add URL'}
         </button>
       </form>
 
@@ -193,7 +247,14 @@ export function DocManager() {
             ) : (
               files.map((file) => (
                 <tr key={file.id}>
-                  <td>{file.name}</td>
+                  <td>
+                    <div className="doc-name">{file.name}</div>
+                    {file.source_url && (
+                      <a className="doc-source-url" href={file.source_url} target="_blank" rel="noreferrer">
+                        {file.source_url}
+                      </a>
+                    )}
+                  </td>
                   <td>
                     <span className={`status status-${file.status}`}>{file.status}</span>
                     {file.last_error && <small className="status-error">{file.last_error}</small>}

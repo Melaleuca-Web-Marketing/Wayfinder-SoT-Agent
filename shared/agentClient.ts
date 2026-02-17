@@ -18,11 +18,13 @@ export interface ChatRequestBody {
   topicHint?: 'melaleuca' | 'riverbend';
   history?: ChatHistoryTurn[];
   images?: ChatAttachmentInput[];
+  previousResponseId?: string;
 }
 
 export interface ChatResponseBody {
   answer: string;
   response?: unknown;
+  responseId?: string;
 }
 
 const DEFAULT_HEADERS = {

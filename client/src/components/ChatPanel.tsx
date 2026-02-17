@@ -49,6 +49,49 @@ const formatMessage = (content: string) => {
   ));
 };
 
+type ParsedSources = {
+  body: string;
+  sources: string[];
+};
+
+const splitSources = (content: string): ParsedSources => {
+  const lines = content.split('\n');
+  const markerIndex = lines.findIndex((line) => /^\s*Sources\s*:/i.test(line));
+  if (markerIndex === -1) {
+    return { body: content, sources: [] };
+  }
+
+  const body = lines.slice(0, markerIndex).join('\n').trim();
+  const sources = lines
+    .slice(markerIndex + 1)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => line.replace(/^[-*]\s*/, ''));
+
+  return { body, sources };
+};
+
+type SourceChip = {
+  label: string;
+  url?: string;
+};
+
+const buildSourceChip = (source: string): SourceChip => {
+  const match = source.match(/https?:\/\/[^\s)]+/i);
+  if (!match) {
+    return { label: source };
+  }
+
+  const url = match[0].replace(/[),.;]+$/, '');
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    return { label: host || url, url };
+  } catch {
+    return { label: url, url };
+  }
+};
+
 const readFileAsDataURL = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -70,6 +113,7 @@ export function ChatPanel() {
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previousResponseId, setPreviousResponseId] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<AttachmentDraft[]>([]);
@@ -251,11 +295,14 @@ export function ChatPanel() {
       setInput('');
       setError(null);
 
-      const historyPayload = messages.map((turn) => ({
-        role: turn.role,
-        content: turn.content,
-        images: turn.images?.map(({ name, mimeType }) => ({ name, mimeType })),
-      }));
+      const historyPayload =
+        previousResponseId ?
+          []
+        : messages.map((turn) => ({
+            role: turn.role,
+            content: turn.content,
+            images: turn.images?.map(({ name, mimeType }) => ({ name, mimeType })),
+          }));
 
       const imagePayload = attachments.map((attachment) => ({
         data: attachment.base64,
@@ -290,16 +337,23 @@ export function ChatPanel() {
           topicHint,
           history: historyPayload,
           images: imagePayload,
+          ...(previousResponseId ? { previousResponseId } : {}),
         };
         const data: ChatResponseBody = await sendChatRequest(requestBody);
         setMessages([...nextMessages, { id: makeId(), role: 'assistant', content: data.answer }]);
+        const responseId =
+          data.responseId ??
+          (data.response && typeof data.response === 'object' && 'id' in data.response ?
+            (data.response as { id?: string }).id
+          : undefined);
+        setPreviousResponseId(responseId ?? null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Chat request failed');
       } finally {
         setLoading(false);
       }
     },
-    [attachments, input, loading, messages, topicHint],
+    [attachments, input, loading, messages, previousResponseId, topicHint],
   );
 
   const stopVoiceSession = useCallback(() => {
@@ -464,6 +518,15 @@ export function ChatPanel() {
     }
   }, [voiceStatus]);
 
+  const handleTopicChange = useCallback((value: 'melaleuca' | 'riverbend') => {
+    setTopicHint(value);
+    // Switching domain focus should start a fresh thread to avoid cross-topic carryover.
+    setPreviousResponseId(null);
+    setMessages([]);
+    setAttachments([]);
+    setError(null);
+  }, []);
+
   return (
     <section className="chat-panel">
       <header>
@@ -471,7 +534,10 @@ export function ChatPanel() {
         <div className="chat-controls">
           <label>
             Domain focus
-            <select value={topicHint} onChange={(event) => setTopicHint(event.target.value as typeof topicHint)}>
+            <select
+              value={topicHint}
+              onChange={(event) => handleTopicChange(event.target.value as 'melaleuca' | 'riverbend')}
+            >
               <option value="melaleuca">Melaleuca</option>
               <option value="riverbend">Riverbend Ranch</option>
             </select>
@@ -490,6 +556,7 @@ export function ChatPanel() {
             onClick={() => {
               setMessages([]);
               setAttachments([]);
+              setPreviousResponseId(null);
             }}
             disabled={loading}
           >
@@ -503,7 +570,9 @@ export function ChatPanel() {
       <div className="chat-transcript">
         {messages.length === 0 && !loading && <p className="empty">Ask something to get started.</p>}
         {messages.map((turn, index) => {
-          const content = formatMessage(turn.content);
+          const parsed = turn.role === 'assistant' ? splitSources(turn.content) : { body: turn.content, sources: [] };
+          const content = formatMessage(parsed.body);
+          const sourceChips = parsed.sources.map(buildSourceChip);
           return (
             <div key={turn.id ?? index} className={`chat-turn ${turn.role} ${turn.streaming ? 'streaming' : ''}`}>
               <div className="chat-role">{turn.role === 'user' ? 'You' : 'Assistant'}</div>
@@ -517,6 +586,24 @@ export function ChatPanel() {
                         <figcaption>{image.name}</figcaption>
                       </figure>
                     ))}
+                  </div>
+                )}
+                {sourceChips.length > 0 && (
+                  <div className="chat-sources">
+                    <span className="chat-sources-label">Sources</span>
+                    <div className="chat-source-chips">
+                      {sourceChips.map((chip, chipIndex) =>
+                        chip.url ? (
+                          <a key={`${chip.url}-${chipIndex}`} href={chip.url} target="_blank" rel="noreferrer" className="chat-source-chip">
+                            {chip.label}
+                          </a>
+                        ) : (
+                          <span key={`${chip.label}-${chipIndex}`} className="chat-source-chip">
+                            {chip.label}
+                          </span>
+                        ),
+                      )}
+                    </div>
                   </div>
                 )}
               </div>

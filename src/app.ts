@@ -11,6 +11,8 @@ import {
   getVectorStoreDetails,
   listVectorStoreFiles,
   uploadFileToVectorStore,
+  uploadUrlToVectorStore,
+  isVectorUrlImportError,
   deleteVectorStoreFile,
   ensureVectorStoreId,
   vectorStoreClient,
@@ -89,10 +91,15 @@ export function createApp(): express.Express {
   });
 
   app.post('/api/chat', async (req, res) => {
-    const { message: rawMessage, topicHint, history, images: rawImages } = req.body ?? {};
+    const { message: rawMessage, topicHint, history, images: rawImages, previousResponseId } = req.body ?? {};
 
     if (rawMessage != null && typeof rawMessage !== 'string') {
       res.status(400).json({ error: 'message must be a string' });
+      return;
+    }
+
+    if (previousResponseId != null && typeof previousResponseId !== 'string') {
+      res.status(400).json({ error: 'previousResponseId must be a string' });
       return;
     }
 
@@ -149,11 +156,13 @@ export function createApp(): express.Express {
         history: sanitizeHistory(history),
         images,
         vectorStoreIds: [vectorStoreId],
+        previousResponseId: previousResponseId?.trim() || undefined,
       });
 
       res.json({
         answer: result.answer,
         response: result.response,
+        responseId: result.response?.id,
       });
     } catch (error) {
       const messageText = error instanceof Error ? error.message : 'Unknown error';
@@ -216,6 +225,33 @@ export function createApp(): express.Express {
       res.status(500).json({ error: message });
     } finally {
       await fs.rm(localPath, { force: true });
+    }
+  });
+
+  app.post('/api/vector/url', async (req, res) => {
+    const { url, filename, name } = req.body ?? {};
+    if (!url || typeof url !== 'string') {
+      res.status(400).json({ error: 'url is required' });
+      return;
+    }
+
+    if (filename != null && typeof filename !== 'string') {
+      res.status(400).json({ error: 'filename must be a string' });
+      return;
+    }
+
+    if (name != null && typeof name !== 'string') {
+      res.status(400).json({ error: 'name must be a string' });
+      return;
+    }
+
+    try {
+      const result = await uploadUrlToVectorStore(url, filename ?? name);
+      res.status(201).json(result);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const status = isVectorUrlImportError(error) ? error.statusCode : 500;
+      res.status(status).json({ error: message });
     }
   });
 
