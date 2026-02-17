@@ -12,6 +12,14 @@ const metaFile = path.resolve('.vector-store.json');
 let cachedVectorStoreId: string | null = null;
 const MAX_URL_BYTES = Number(process.env.MAX_URL_BYTES ?? String(5 * 1024 * 1024));
 const URL_FETCH_TIMEOUT_MS = Number(process.env.URL_FETCH_TIMEOUT_MS ?? '15000');
+const VECTOR_URL_AUTH_MODE = (process.env.VECTOR_URL_AUTH_MODE ?? 'none').trim().toLowerCase();
+const VECTOR_URL_AUTH_DOMAIN = normalizeHost(process.env.VECTOR_URL_AUTH_DOMAIN ?? '');
+const VECTOR_URL_AUTH_COOKIE = process.env.VECTOR_URL_AUTH_COOKIE?.trim() ?? '';
+const VECTOR_URL_AUTH_COOKIE_FILE = process.env.VECTOR_URL_AUTH_COOKIE_FILE?.trim() ?? 'authcookie.sh';
+const VECTOR_URL_USER_AGENT =
+  process.env.VECTOR_URL_USER_AGENT ??
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36';
+const VECTOR_URL_ACCEPT_LANGUAGE = process.env.VECTOR_URL_ACCEPT_LANGUAGE ?? 'en-US,en;q=0.9';
 const URL_DOWNLOAD_DIR = path.join(process.env.TMPDIR ?? '/tmp', 'wayfinder-url-imports');
 const SUPPORTED_URL_CONTENT_TYPES = new Set([
   'text/html',
@@ -24,6 +32,7 @@ const SUPPORTED_URL_CONTENT_TYPES = new Set([
   'application/xml',
 ]);
 const SUPPORTED_URL_EXTENSIONS = new Set(['.pdf', '.md', '.markdown', '.txt', '.html', '.htm']);
+let cachedAuthCookieFromFile: string | null | undefined;
 
 class VectorUrlImportError extends Error {
   statusCode: number;
@@ -123,12 +132,13 @@ export async function uploadUrlToVectorStore(targetUrl: string, filename?: strin
   }
 
   await fs.mkdir(URL_DOWNLOAD_DIR, { recursive: true });
+  const headers = await buildUrlFetchHeaders(url);
 
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), URL_FETCH_TIMEOUT_MS);
   let response: Response;
   try {
-    response = await fetch(url.toString(), { redirect: 'follow', signal: controller.signal });
+    response = await fetch(url.toString(), { redirect: 'follow', signal: controller.signal, headers });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       throw new VectorUrlImportError(`URL fetch timed out after ${URL_FETCH_TIMEOUT_MS}ms.`, 504);
@@ -295,6 +305,16 @@ function normalizeUrl(value: string): URL {
   }
 }
 
+function normalizeHost(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .split('/')[0]
+    .trim();
+}
+
 function isUrlAllowed(url: URL): boolean {
   const allowlist = settings.vectorUrlAllowlist ?? [];
   if (allowlist.length === 0) {
@@ -305,6 +325,90 @@ function isUrlAllowed(url: URL): boolean {
   }
   const host = url.hostname.replace(/^www\./, '').toLowerCase();
   return allowlist.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+async function buildUrlFetchHeaders(url: URL): Promise<Headers> {
+  const headers = new Headers({
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,text/markdown;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+    'Accept-Language': VECTOR_URL_ACCEPT_LANGUAGE,
+    'Cache-Control': 'no-cache',
+    'User-Agent': VECTOR_URL_USER_AGENT,
+  });
+
+  const cookie = await resolveAuthCookie(url);
+  if (cookie) {
+    headers.set('Cookie', cookie);
+  }
+
+  return headers;
+}
+
+async function resolveAuthCookie(url: URL): Promise<string | undefined> {
+  if (VECTOR_URL_AUTH_MODE !== 'cookie') {
+    return undefined;
+  }
+
+  if (!isAuthDomainMatch(url)) {
+    return undefined;
+  }
+
+  if (VECTOR_URL_AUTH_COOKIE.length > 0) {
+    return VECTOR_URL_AUTH_COOKIE;
+  }
+
+  const fileCookie = await loadAuthCookieFromFile();
+  if (fileCookie) {
+    return fileCookie;
+  }
+
+  throw new VectorUrlImportError(
+    'VECTOR_URL_AUTH_MODE=cookie but no cookie is configured. Set VECTOR_URL_AUTH_COOKIE (recommended for Vercel).',
+    500,
+  );
+}
+
+function isAuthDomainMatch(url: URL): boolean {
+  if (!VECTOR_URL_AUTH_DOMAIN) {
+    return true;
+  }
+
+  const host = normalizeHost(url.hostname);
+  return host === VECTOR_URL_AUTH_DOMAIN || host.endsWith(`.${VECTOR_URL_AUTH_DOMAIN}`);
+}
+
+async function loadAuthCookieFromFile(): Promise<string | undefined> {
+  if (cachedAuthCookieFromFile !== undefined) {
+    return cachedAuthCookieFromFile ?? undefined;
+  }
+
+  try {
+    const filePath = path.resolve(VECTOR_URL_AUTH_COOKIE_FILE);
+    const raw = await fs.readFile(filePath, 'utf8');
+    const cookie = extractCookieFromCurlScript(raw) ?? raw.trim();
+    cachedAuthCookieFromFile = cookie.length > 0 ? cookie : null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      cachedAuthCookieFromFile = null;
+      return undefined;
+    }
+    throw error;
+  }
+
+  return cachedAuthCookieFromFile ?? undefined;
+}
+
+function extractCookieFromCurlScript(raw: string): string | null {
+  const cookieFlagMatch = raw.match(/(?:^|\s)-b\s+(['"])([\s\S]*?)\1/);
+  if (cookieFlagMatch?.[2]) {
+    return cookieFlagMatch[2].trim();
+  }
+
+  const cookieHeaderMatch = raw.match(/(?:^|\s)-H\s+(['"])cookie:\s*([\s\S]*?)\1/i);
+  if (cookieHeaderMatch?.[2]) {
+    return cookieHeaderMatch[2].trim();
+  }
+
+  return null;
 }
 
 function normalizeContentType(value: string | null): string {

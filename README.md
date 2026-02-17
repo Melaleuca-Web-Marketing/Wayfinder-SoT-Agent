@@ -70,6 +70,11 @@ Each case asserts that at least one cited URL starts with the required domain. A
 
 - When the server starts it will look for `VECTOR_STORE_ID` in `.env`. If none is provided it creates a new vector store and caches the ID in `.vector-store.json`.
 - Visit the Documents tab in the UI to upload PDF/Markdown assets. Files are streamed to OpenAI, attached to the vector store, and listed with their indexing status.
+- URL imports can optionally send authenticated cookies for private pages. For Vercel, set:
+  - `VECTOR_URL_AUTH_MODE=cookie`
+  - `VECTOR_URL_AUTH_DOMAIN=melaleuca.com` (or a narrower host)
+  - `VECTOR_URL_AUTH_COOKIE=<cookie header value>`
+  - Optional local fallback: `VECTOR_URL_AUTH_COOKIE_FILE=authcookie.sh`
 - The Chat tab provides a conversational harness that shares context with the vector store and enforces on-domain sourcing. Every answer ends with a `Sources` block.
 - The Chat tab now supports image attachments—paste or upload up to three screenshots (PNG/JPEG/WebP) per turn to pair vision context with your question.
 - The `widget` package builds a portable Wayfinder popup chat that embeds on marketing sites while riding on the same `/api` backend and vector store. Run `npm run dev --prefix widget` to preview the popup locally.

@@ -10,5 +10,6 @@ _uploads/
 .uploads/
 *.log
 .vector-store.json
+authcookie.sh
 server.log
 client.log
