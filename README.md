@@ -110,3 +110,5 @@ Tweak the `.env` knobs to adjust these guardrails as you scale.
 - The browser captures microphone input, streams it to the model, and plays synthesized audio replies while streaming transcripts into the existing chat window (including Sources when returned).
 - Use **Stop voice** to end the session; transcripts remain in history alongside typed messages for easy follow-up.
 - Configure voice defaults via `REALTIME_VOICE` and reuse the same security guardrails enforced for text requests.
+
+_Deployment note: updated on February 17, 2026 to trigger a new Vercel deployment._
