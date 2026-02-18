@@ -100,6 +100,10 @@ a:hover {
   gap: 1rem;
 }
 
+.chat-panel {
+  min-height: min(860px, calc(100vh - 240px));
+}
+
 .chat-panel header,
 .doc-manager header {
   display: flex;
@@ -198,7 +202,7 @@ a:hover {
   padding: 1.1rem;
   overflow-y: auto;
   background: #f7fff7;
-  max-height: 480px;
+  min-height: 340px;
 }
 
 .chat-turn {
@@ -229,6 +233,8 @@ a:hover {
   background: #f7fff7;
   border: 1px solid rgba(48, 134, 45, 0.2);
   color: #252525;
+  font-size: 0.92rem;
+  line-height: 1.45;
 }
 
 .chat-content {
@@ -590,6 +596,14 @@ a:hover {
 }
 
 @media (max-width: 720px) {
+  .chat-panel {
+    min-height: auto;
+  }
+
+  .chat-transcript {
+    min-height: 280px;
+  }
+
   .app-header {
     flex-direction: column;
     align-items: flex-start;
