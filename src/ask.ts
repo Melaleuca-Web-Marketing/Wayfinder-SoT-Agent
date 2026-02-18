@@ -305,6 +305,53 @@ async function createResponseWithTools(
   return client.responses.create(payload as any);
 }
 
+async function createResponseWithCompatibilityFallback(
+  requestBase: Record<string, unknown>,
+  setup: ToolSetup,
+  vectorStoreIds: string[] | undefined,
+  domainConfig: DomainConfig,
+): Promise<Response> {
+  try {
+    return await createResponseWithTools(requestBase, setup, supportsToolResources);
+  } catch (error) {
+    if (supportsToolResources && setup.toolResources && isUnknownToolResourcesError(error)) {
+      console.warn('Responses API does not accept tool_resources. Falling back to legacy vector store attachment.');
+      supportsToolResources = false;
+      useLegacyToolVectorStoreAttachment = true;
+
+      const legacySetup = buildTools(vectorStoreIds, domainConfig);
+      return createResponseWithTools(requestBase, legacySetup, supportsToolResources);
+    }
+    throw error;
+  }
+}
+
+function hasFileSearchTool(setup: ToolSetup): boolean {
+  return setup.tools.some((tool) => tool.type === 'file_search');
+}
+
+function isSourceFallbackAnswer(answer: string): boolean {
+  return /^I couldn't confirm from our site or files\./i.test(answer.trim());
+}
+
+function buildRetryUserContent(userContent: ResponseInputMessageContentList): ResponseInputMessageContentList {
+  return userContent.map((piece) => {
+    if (piece.type !== 'input_text') {
+      return piece;
+    }
+
+    return {
+      ...piece,
+      text:
+        `${piece.text}\n\n` +
+        'Retry instruction: The previous attempt could not confirm an allowlisted source. ' +
+        'Call file_search first on the provided vector store before finalizing. ' +
+        'Use web_search only if file_search is insufficient. ' +
+        'Return a concise answer with a Sources section citing exact file names or URLs.',
+    };
+  });
+}
+
 function extractFirstMessageText(response: Response): string {
   for (const item of response.output ?? []) {
     if (item.type === 'message') {
@@ -365,53 +412,83 @@ export async function ask(params: AskParams): Promise<AskResult> {
     });
   }
 
-  const requestBase = {
-    model,
-    max_output_tokens: MAX_OUTPUT_TOKENS,
-    include: ['web_search_call.action.sources', 'file_search_call.results'],
-    input: [
-      {
-        role: 'system',
-        content: [
-          {
-            type: 'input_text',
-            text: systemPrompt,
-          },
-        ],
+  const buildRequestBase = (
+    content: ResponseInputMessageContentList,
+    metadataExtras?: Record<string, string>,
+  ) =>
+    ({
+      model,
+      max_output_tokens: MAX_OUTPUT_TOKENS,
+      include: ['web_search_call.action.sources', 'file_search_call.results'],
+      input: [
+        {
+          role: 'system',
+          content: [
+            {
+              type: 'input_text',
+              text: systemPrompt,
+            },
+          ],
+        },
+        {
+          role: 'user',
+          content,
+        },
+      ],
+      metadata: {
+        topic_hint: topic,
+        primary_domain: domainConfig.preferredDomains[0],
+        ...(metadataExtras ?? {}),
       },
-      {
-        role: 'user',
-        content: userContent,
-      },
-    ],
-    metadata: {
-      topic_hint: topic,
-      primary_domain: domainConfig.preferredDomains[0],
-    },
-    ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
-  } as const;
+      ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
+    }) as const;
 
-  let response: Response;
+  const requestBase = buildRequestBase(userContent);
 
-  try {
-    response = await createResponseWithTools(requestBase, toolSetup, supportsToolResources);
-  } catch (error) {
-    if (supportsToolResources && toolSetup.toolResources && isUnknownToolResourcesError(error)) {
-      console.warn('Responses API does not accept tool_resources. Falling back to legacy vector store attachment.');
-      supportsToolResources = false;
-      useLegacyToolVectorStoreAttachment = true;
+  let response = await createResponseWithCompatibilityFallback(
+    requestBase,
+    toolSetup,
+    params.vectorStoreIds,
+    domainConfig,
+  );
 
-      const legacySetup = buildTools(params.vectorStoreIds, domainConfig);
-      response = await createResponseWithTools(requestBase, legacySetup, supportsToolResources);
-    } else {
-      throw error;
-    }
-  }
-
-  const answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
-  const finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, response, params.images, imageInsights);
+  let answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
+  let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, response, params.images, imageInsights);
   if (!hasSourcesSection(answerWithSources)) {
     console.warn('Model response missing Sources section.');
+  }
+
+  if (isSourceFallbackAnswer(finalAnswer) && hasFileSearchTool(toolSetup)) {
+    const retryContent = buildRetryUserContent(userContent);
+    const retryRequestBase = buildRequestBase(retryContent, { retry_after_source_fallback: '1' });
+
+    try {
+      const retrySetup = buildTools(params.vectorStoreIds, domainConfig);
+      const retryResponse = await createResponseWithCompatibilityFallback(
+        retryRequestBase,
+        retrySetup,
+        params.vectorStoreIds,
+        domainConfig,
+      );
+      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retryFinalAnswer = enforceSourceAllowlist(
+        retryAnswerWithSources,
+        domainConfig,
+        retryResponse,
+        params.images,
+        imageInsights,
+      );
+
+      if (!hasSourcesSection(retryAnswerWithSources)) {
+        console.warn('Model retry response missing Sources section.');
+      }
+
+      response = retryResponse;
+      answerWithSources = retryAnswerWithSources;
+      finalAnswer = retryFinalAnswer;
+    } catch (error) {
+      console.warn('Retry after source fallback failed:', error);
+    }
   }
 
   return {
