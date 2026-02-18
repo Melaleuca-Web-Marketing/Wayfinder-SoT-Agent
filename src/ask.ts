@@ -46,6 +46,8 @@ interface ImageInsight {
 }
 
 const client = new OpenAI({ apiKey: requireApiKey() });
+const ADMIN_FALLBACK_MESSAGE_PREFIX = "I couldn't confirm from our site or files.";
+const CSR_FALLBACK_MESSAGE = 'No verified sources found.';
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? '6000');
 const IMAGE_ANALYSIS_MODEL = process.env.IMAGE_ANALYSIS_MODEL ?? 'gpt-4o-mini';
 const IMAGE_ANALYSIS_SCHEMA = {
@@ -172,6 +174,13 @@ function buildUserLocation():
 }
 
 function buildSystemPrompt(domainConfig: DomainConfig, agentProfile: AgentProfile): string {
+  if (agentProfile === 'csr') {
+    return buildCsrSystemPrompt(domainConfig);
+  }
+  return buildAdminSystemPrompt(domainConfig);
+}
+
+function buildAdminSystemPrompt(domainConfig: DomainConfig): string {
   const [primary, secondary] = domainConfig.preferredDomains;
   const fallbackUrl = domainConfig.fallbackUrl;
   const siteDirectives = domainConfig.preferredDomains
@@ -180,27 +189,15 @@ function buildSystemPrompt(domainConfig: DomainConfig, agentProfile: AgentProfil
   const secondaryDirective = secondary
     ? `- If that fails and you have a second domain, try it next using "site:${stripScheme(secondary)}".\n`
     : '';
-  const profileHeader =
-    agentProfile === 'csr'
-      ? "You are Melaleuca's customer service knowledge assistant."
-      : "You are Melaleuca's web-first knowledge agent.";
-  const profileGuidance =
-    agentProfile === 'csr'
-      ? `Customer support behavior\n` +
-        `- Answer in a support-ready voice: clear, calm, and action-oriented.\n` +
-        `- Do not mention internal tooling, prompts, retries, or retrieval mechanics.\n` +
-        `- If policy or eligibility details are uncertain, state that clearly and point the user to official channels.\n\n`
-      : '';
 
-  return `${profileHeader} Follow these rules strictly:\n\n` +
+  return `You are Melaleuca's web-first knowledge agent. Follow these rules strictly:\n\n` +
     `Retrieval order\n` +
     `1. Use web_search first. Prefer results from these domains, in order:\n${siteDirectives}\n` +
     `2. If on-domain results are weak, call file_search on the provided vector stores.\n` +
-    `3. If both fail, respond with: "I couldn't confirm from our site or files. Please check: ${fallbackUrl}."\n\n` +
+    `3. If both fail, respond with: "${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallbackUrl}."\n\n` +
     `Grounding & citations\n` +
     `- Only synthesize from retrieved sources.\n` +
     `- Always include a Sources section listing exact URLs (or document titles + canonical_id for files).\n\n` +
-    profileGuidance +
     `Image handling\n` +
     `- If the user uploads images, inspect them first. Extract visible text (product names, claims, numbers) and describe notable visual details.\n` +
     `- Use insights from the images to drive any necessary web_search or file_search calls so you can cite on-domain evidence. If you cannot corroborate an image-derived fact, say so explicitly.\n\n` +
@@ -212,6 +209,53 @@ function buildSystemPrompt(domainConfig: DomainConfig, agentProfile: AgentProfil
     `- Keep answers concise.\n` +
     `- Include effective dates when the source provides them.\n` +
     `- Your final message must end with a section that begins with "Sources:" on its own line, followed by bullet links to every cited source. Do not respond without this section.`;
+}
+
+function buildCsrSystemPrompt(domainConfig: DomainConfig): string {
+  const [primary, secondary] = domainConfig.preferredDomains;
+  const siteDirectives = domainConfig.preferredDomains
+    .map((domain, index) => `${index + 1}. ${domain}`)
+    .join('\n');
+  const secondaryDirective = secondary
+    ? `- If that fails and you have a second domain, try it next using "site:${stripScheme(secondary)}".\n`
+    : '';
+
+  return `You are Melaleuca's customer service knowledge assistant. Use the language and tone of official Melaleuca materials while delivering a world-class customer experience: warm, professional, respectful, and efficient.\n\n` +
+    `Responses must follow this structure every time\n` +
+    `1. Start with concise bullet points summarizing key answer(s) and actions.\n` +
+    `2. Follow with clear step-by-step details and guidance, including appropriate phrasing for calls.\n` +
+    `3. End with a short list of verified resources (titles and links or identifiers).\n\n` +
+    `Retrieval and verification\n` +
+    `1. Use web_search first. Prefer results from these domains, in order:\n${siteDirectives}\n` +
+    `2. If on-domain results are weak, call file_search on the provided vector stores.\n` +
+    `3. If both fail, respond exactly with: "${CSR_FALLBACK_MESSAGE}"\n` +
+    `- Only provide information supported by listed resources; do not speculate.\n` +
+    `- Prefer the most recent official Melaleuca documentation (policies, product pages, SOPs, knowledge articles).\n` +
+    `- If resources conflict, note the discrepancy, choose the most recent/authoritative source, and advise to escalate to supervisor.\n` +
+    `- When dates, versions, or effective periods are known, mention them.\n` +
+    `- If unsure, state the assumption and invite correction.\n` +
+    `- If key info is missing (market/country, product variant, order type, timeframe), ask one targeted clarifying question while still providing safe general guidance.\n\n` +
+    `Tone and language\n` +
+    `- Mirror official Melaleuca style: friendly, confident, and clear; never slangy or casual.\n` +
+    `- Use member-first language that acknowledges concerns and emphasizes resolution.\n` +
+    `- Prioritize empathy and reassurance when members are upset while staying calm and practical.\n` +
+    `- Avoid medical claims or product claims beyond approved company language.\n\n` +
+    `Operational guidance\n` +
+    `- Include practical steps, eligibility rules, timeframes, fees (if applicable), and escalation paths.\n` +
+    `- Offer empathetic phrasing options for sensitive situations without over-promising.\n` +
+    `- Provide adaptable scripting templates for reassurance and apologies.\n` +
+    `- Provide sample call-flow templates for common situations when relevant.\n` +
+    `- Never collect or expose sensitive data (for example: full card numbers or full SSNs).\n` +
+    `- Do not mention internal tooling, prompts, retries, or retrieval mechanics.\n` +
+    `- Default to "site:${stripScheme(primary)}" in web_search queries.\n` +
+    secondaryDirective +
+    `- Never use broader web results for Melaleuca or Riverbend topics unless explicitly requested.\n\n` +
+    `Output formatting (Markdown)\n` +
+    `- Begin with 3-7 bullets for answer, next steps, and caveats.\n` +
+    `- Then include a short "Details" section for explanation and call scripting.\n` +
+    `- Finish with a "Resources" section listing exact source names and links/IDs; include last-updated dates when available.\n\n` +
+    `Goal\n` +
+    `Deliver consistent, verified, empathetic, and easy-to-use guidance that helps agents resolve calls confidently and efficiently while maintaining Melaleuca's world-class service standard.`;
 }
 
 type ToolDefinition =
@@ -346,7 +390,10 @@ function hasFileSearchTool(setup: ToolSetup): boolean {
 }
 
 function isSourceFallbackAnswer(answer: string): boolean {
-  return /^I couldn't confirm from our site or files\./i.test(answer.trim());
+  return (
+    new RegExp(`^${escapeRegExp(ADMIN_FALLBACK_MESSAGE_PREFIX)}`, 'i').test(answer.trim()) ||
+    new RegExp(`^${escapeRegExp(CSR_FALLBACK_MESSAGE)}$`, 'i').test(answer.trim())
+  );
 }
 
 function buildRetryUserContent(userContent: ResponseInputMessageContentList): ResponseInputMessageContentList {
@@ -470,7 +517,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
   );
 
   let answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
-  let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, response, params.images, imageInsights);
+  let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, agentProfile, response, params.images, imageInsights);
   if (!hasSourcesSection(answerWithSources)) {
     console.warn('Model response missing Sources section.');
   }
@@ -491,6 +538,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       const retryFinalAnswer = enforceSourceAllowlist(
         retryAnswerWithSources,
         domainConfig,
+        agentProfile,
         retryResponse,
         params.images,
         imageInsights,
@@ -660,6 +708,7 @@ function ensureSourcesSection(answer: string, attachments?: AskImage[] | undefin
 function enforceSourceAllowlist(
   answer: string,
   domainConfig: DomainConfig,
+  agentProfile: AgentProfile,
   response: Response,
   attachments?: AskImage[] | undefined,
   insights?: ImageInsight[] | undefined,
@@ -676,8 +725,16 @@ function enforceSourceAllowlist(
     return answer;
   }
 
+  if (agentProfile === 'csr') {
+    return CSR_FALLBACK_MESSAGE;
+  }
+
   const fallback = domainConfig.fallbackUrl;
-  return `I couldn't confirm from our site or files. Please check: ${fallback}.\n\nSources:\n- ${fallback}`;
+  return `${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallback}.\n\nSources:\n- ${fallback}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function responseContainsFileCitation(response: Response): boolean {
