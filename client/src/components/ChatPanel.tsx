@@ -337,6 +337,7 @@ export function ChatPanel() {
           topicHint,
           history: historyPayload,
           images: imagePayload,
+          agentProfile: 'admin',
           ...(previousResponseId ? { previousResponseId } : {}),
         };
         const data: ChatResponseBody = await sendChatRequest(requestBody);

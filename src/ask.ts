@@ -3,6 +3,8 @@ import type { Response } from 'openai/resources/responses/responses';
 import { requireApiKey, settings, type TopicHint } from './config.js';
 import type { ResponseInputMessageContentList } from 'openai/resources/responses/responses';
 
+export type AgentProfile = 'admin' | 'csr';
+
 export interface AskParams {
   message: string;
   topicHint?: TopicHint;
@@ -11,6 +13,7 @@ export interface AskParams {
   history?: ConversationTurn[];
   images?: AskImage[];
   previousResponseId?: string;
+  agentProfile?: AgentProfile;
 }
 
 export interface AskResult {
@@ -168,7 +171,7 @@ function buildUserLocation():
   };
 }
 
-function buildSystemPrompt(domainConfig: DomainConfig): string {
+function buildSystemPrompt(domainConfig: DomainConfig, agentProfile: AgentProfile): string {
   const [primary, secondary] = domainConfig.preferredDomains;
   const fallbackUrl = domainConfig.fallbackUrl;
   const siteDirectives = domainConfig.preferredDomains
@@ -177,8 +180,19 @@ function buildSystemPrompt(domainConfig: DomainConfig): string {
   const secondaryDirective = secondary
     ? `- If that fails and you have a second domain, try it next using "site:${stripScheme(secondary)}".\n`
     : '';
+  const profileHeader =
+    agentProfile === 'csr'
+      ? "You are Melaleuca's customer service knowledge assistant."
+      : "You are Melaleuca's web-first knowledge agent.";
+  const profileGuidance =
+    agentProfile === 'csr'
+      ? `Customer support behavior\n` +
+        `- Answer in a support-ready voice: clear, calm, and action-oriented.\n` +
+        `- Do not mention internal tooling, prompts, retries, or retrieval mechanics.\n` +
+        `- If policy or eligibility details are uncertain, state that clearly and point the user to official channels.\n\n`
+      : '';
 
-  return `You are Melaleuca's web-first knowledge agent. Follow these rules strictly:\n\n` +
+  return `${profileHeader} Follow these rules strictly:\n\n` +
     `Retrieval order\n` +
     `1. Use web_search first. Prefer results from these domains, in order:\n${siteDirectives}\n` +
     `2. If on-domain results are weak, call file_search on the provided vector stores.\n` +
@@ -186,6 +200,7 @@ function buildSystemPrompt(domainConfig: DomainConfig): string {
     `Grounding & citations\n` +
     `- Only synthesize from retrieved sources.\n` +
     `- Always include a Sources section listing exact URLs (or document titles + canonical_id for files).\n\n` +
+    profileGuidance +
     `Image handling\n` +
     `- If the user uploads images, inspect them first. Extract visible text (product names, claims, numbers) and describe notable visual details.\n` +
     `- Use insights from the images to drive any necessary web_search or file_search calls so you can cite on-domain evidence. If you cannot corroborate an image-derived fact, say so explicitly.\n\n` +
@@ -388,10 +403,11 @@ export async function ask(params: AskParams): Promise<AskResult> {
   }
 
   const topic = params.topicHint ?? inferTopicHint(message);
+  const agentProfile = params.agentProfile ?? 'admin';
   const domainConfig = buildDomainConfig(topic);
   const model = params.model ?? settings.model;
   const toolSetup = buildTools(params.vectorStoreIds, domainConfig);
-  const systemPrompt = buildSystemPrompt(domainConfig);
+  const systemPrompt = buildSystemPrompt(domainConfig, agentProfile);
 
   const imageInsights = hasImages ? await extractImageInsights(params.images ?? [], topic) : [];
   const historyTranscript = params.previousResponseId ? null : formatHistory(params.history ?? []);
@@ -438,6 +454,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       metadata: {
         topic_hint: topic,
         primary_domain: domainConfig.preferredDomains[0],
+        agent_profile: agentProfile,
         ...(metadataExtras ?? {}),
       },
       ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),

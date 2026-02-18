@@ -6,7 +6,7 @@ import path from 'node:path';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { ask, type AskImage, type ConversationImage } from './ask.js';
+import { ask, type AgentProfile, type AskImage, type ConversationImage } from './ask.js';
 import {
   getVectorStoreDetails,
   listVectorStoreFiles,
@@ -55,6 +55,7 @@ const OUT_OF_SCOPE_PATTERN =
 
 const FALLBACK_MESSAGE =
   "I'm built to answer questions about Melaleuca, Riverbend Ranch, and the R3 program. Please ask about those topics.";
+const ALLOWED_AGENT_PROFILES = new Set<AgentProfile>(['admin', 'csr']);
 
 export function createApp(): express.Express {
   const app = express();
@@ -91,7 +92,7 @@ export function createApp(): express.Express {
   });
 
   app.post('/api/chat', async (req, res) => {
-    const { message: rawMessage, topicHint, history, images: rawImages, previousResponseId } = req.body ?? {};
+    const { message: rawMessage, topicHint, history, images: rawImages, previousResponseId, agentProfile } = req.body ?? {};
 
     if (rawMessage != null && typeof rawMessage !== 'string') {
       res.status(400).json({ error: 'message must be a string' });
@@ -100,6 +101,17 @@ export function createApp(): express.Express {
 
     if (previousResponseId != null && typeof previousResponseId !== 'string') {
       res.status(400).json({ error: 'previousResponseId must be a string' });
+      return;
+    }
+
+    if (agentProfile != null && typeof agentProfile !== 'string') {
+      res.status(400).json({ error: 'agentProfile must be a string' });
+      return;
+    }
+
+    const resolvedAgentProfile = (agentProfile?.trim().toLowerCase() || 'admin') as AgentProfile;
+    if (!ALLOWED_AGENT_PROFILES.has(resolvedAgentProfile)) {
+      res.status(400).json({ error: 'agentProfile must be one of: admin, csr' });
       return;
     }
 
@@ -157,6 +169,7 @@ export function createApp(): express.Express {
         images,
         vectorStoreIds: [vectorStoreId],
         previousResponseId: previousResponseId?.trim() || undefined,
+        agentProfile: resolvedAgentProfile,
       });
 
       res.json({

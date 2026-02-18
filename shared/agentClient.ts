@@ -19,6 +19,7 @@ export interface ChatRequestBody {
   history?: ChatHistoryTurn[];
   images?: ChatAttachmentInput[];
   previousResponseId?: string;
+  agentProfile?: 'admin' | 'csr';
 }
 
 export interface ChatResponseBody {
