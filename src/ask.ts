@@ -4,12 +4,14 @@ import { requireApiKey, settings, type TopicHint } from './config.js';
 import type { ResponseInputMessageContentList } from 'openai/resources/responses/responses';
 
 export type AgentProfile = 'admin' | 'csr';
+export type ReasoningEffort = 'low' | 'medium' | 'high';
 
 export interface AskParams {
   message: string;
   topicHint?: TopicHint;
   vectorStoreIds?: string[];
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   history?: ConversationTurn[];
   images?: AskImage[];
   previousResponseId?: string;
@@ -504,6 +506,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
         agent_profile: agentProfile,
         ...(metadataExtras ?? {}),
       },
+      ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
       ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
     }) as const;
 

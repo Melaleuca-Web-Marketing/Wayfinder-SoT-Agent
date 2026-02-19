@@ -6,7 +6,7 @@ import path from 'node:path';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { ask, type AgentProfile, type AskImage, type ConversationImage } from './ask.js';
+import { ask, type AgentProfile, type AskImage, type ConversationImage, type ReasoningEffort } from './ask.js';
 import {
   getVectorStoreDetails,
   listVectorStoreFiles,
@@ -56,6 +56,23 @@ const OUT_OF_SCOPE_PATTERN =
 const FALLBACK_MESSAGE =
   "I'm built to answer questions about Melaleuca, Riverbend Ranch, and the R3 program. Please ask about those topics.";
 const ALLOWED_AGENT_PROFILES = new Set<AgentProfile>(['admin', 'csr']);
+type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
+const ALLOWED_ADMIN_MODEL_PRESETS = new Set<AdminModelPreset>(['gpt-4.1', 'gpt-5.1-none', 'gpt-5.1-low']);
+const ADMIN_MODEL_PRESET_GPT_4_1 = process.env.ADMIN_MODEL_PRESET_GPT_4_1 ?? 'gpt-4.1';
+const ADMIN_MODEL_PRESET_GPT_5_1 = process.env.ADMIN_MODEL_PRESET_GPT_5_1 ?? 'gpt-5.1';
+
+function resolveAdminModelPreset(preset: AdminModelPreset): { model: string; reasoningEffort?: ReasoningEffort } {
+  switch (preset) {
+    case 'gpt-4.1':
+      return { model: ADMIN_MODEL_PRESET_GPT_4_1 };
+    case 'gpt-5.1-none':
+      return { model: ADMIN_MODEL_PRESET_GPT_5_1 };
+    case 'gpt-5.1-low':
+      return { model: ADMIN_MODEL_PRESET_GPT_5_1, reasoningEffort: 'low' };
+    default:
+      return { model: settings.model };
+  }
+}
 
 export function createApp(): express.Express {
   const app = express();
@@ -92,7 +109,15 @@ export function createApp(): express.Express {
   });
 
   app.post('/api/chat', async (req, res) => {
-    const { message: rawMessage, topicHint, history, images: rawImages, previousResponseId, agentProfile } = req.body ?? {};
+    const {
+      message: rawMessage,
+      topicHint,
+      history,
+      images: rawImages,
+      previousResponseId,
+      agentProfile,
+      adminModelPreset: rawAdminModelPreset,
+    } = req.body ?? {};
 
     if (rawMessage != null && typeof rawMessage !== 'string') {
       res.status(400).json({ error: 'message must be a string' });
@@ -109,11 +134,25 @@ export function createApp(): express.Express {
       return;
     }
 
+    if (rawAdminModelPreset != null && typeof rawAdminModelPreset !== 'string') {
+      res.status(400).json({ error: 'adminModelPreset must be a string' });
+      return;
+    }
+
     const resolvedAgentProfile = (agentProfile?.trim().toLowerCase() || 'admin') as AgentProfile;
     if (!ALLOWED_AGENT_PROFILES.has(resolvedAgentProfile)) {
       res.status(400).json({ error: 'agentProfile must be one of: admin, csr' });
       return;
     }
+
+    const adminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
+    if (adminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(adminModelPreset)) {
+      res.status(400).json({ error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low' });
+      return;
+    }
+
+    const adminModelOverride =
+      resolvedAgentProfile === 'admin' && adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
 
     const message = typeof rawMessage === 'string' ? rawMessage : '';
 
@@ -165,6 +204,8 @@ export function createApp(): express.Express {
       const result = await ask({
         message,
         topicHint,
+        model: adminModelOverride?.model,
+        reasoningEffort: adminModelOverride?.reasoningEffort,
         history: sanitizeHistory(history),
         images,
         vectorStoreIds: [vectorStoreId],

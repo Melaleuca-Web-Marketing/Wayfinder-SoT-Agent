@@ -13,3 +13,4 @@ _uploads/
 authcookie.sh
 server.log
 client.log
+.vercel

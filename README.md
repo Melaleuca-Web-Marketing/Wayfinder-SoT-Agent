@@ -87,7 +87,7 @@ The backend exposes JSON endpoints under `/api` so any client (admin UI, widget,
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/api/status` | Health probe. Returns `{ ok: true, model: "<id>" }` when the OpenAI Responses API is reachable. |
-| `POST` | `/api/chat` | Main chat endpoint. Body: `{ message: string, topicHint?: "melaleuca" \| "riverbend", history?: ConversationTurn[], images?: Base64Image[], vectorStoreIds?: string[], previousResponseId?: string, agentProfile?: "admin" \| "csr" }`. Responds with `{ answer, response, responseId }`, where `response` is the raw Responses API payload (including tool calls and citations). |
+| `POST` | `/api/chat` | Main chat endpoint. Body: `{ message: string, topicHint?: "melaleuca" \| "riverbend", history?: ConversationTurn[], images?: Base64Image[], vectorStoreIds?: string[], previousResponseId?: string, agentProfile?: "admin" \| "csr", adminModelPreset?: "gpt-4.1" \| "gpt-5.1-none" \| "gpt-5.1-low" }`. Responds with `{ answer, response, responseId }`, where `response` is the raw Responses API payload (including tool calls and citations). `adminModelPreset` is ignored for `csr` profile calls. |
 | `POST` | `/api/realtime/token` | Creates a short-lived Realtime session for voice calls. The widget/admin UI exchanges the token with the browser Realtime SDK. |
 | `GET` | `/api/vector/store` | Returns the active vector store metadata (`{ id, name, file_count }`). |
 | `GET` | `/api/vector/files` | Lists the most recent files attached to the store with status + error fields. |

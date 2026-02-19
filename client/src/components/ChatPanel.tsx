@@ -34,6 +34,7 @@ interface AttachmentDraft {
 }
 
 type VoiceStatus = 'idle' | 'connecting' | 'active';
+type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
 
 const MAX_ATTACHMENTS = 3;
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024; // 4MB
@@ -109,6 +110,7 @@ const readFileAsDataURL = (file: File): Promise<string> => {
 
 export function ChatPanel() {
   const [topicHint, setTopicHint] = useState<'melaleuca' | 'riverbend'>('melaleuca');
+  const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-4.1');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
@@ -338,6 +340,7 @@ export function ChatPanel() {
           history: historyPayload,
           images: imagePayload,
           agentProfile: 'admin',
+          adminModelPreset,
           ...(previousResponseId ? { previousResponseId } : {}),
         };
         const data: ChatResponseBody = await sendChatRequest(requestBody);
@@ -354,7 +357,7 @@ export function ChatPanel() {
         setLoading(false);
       }
     },
-    [attachments, input, loading, messages, previousResponseId, topicHint],
+    [adminModelPreset, attachments, input, loading, messages, previousResponseId, topicHint],
   );
 
   const stopVoiceSession = useCallback(() => {
@@ -528,6 +531,15 @@ export function ChatPanel() {
     setError(null);
   }, []);
 
+  const handleModelPresetChange = useCallback((value: AdminModelPreset) => {
+    setAdminModelPreset(value);
+    // Model changes should start a fresh thread for clean A/B comparisons.
+    setPreviousResponseId(null);
+    setMessages([]);
+    setAttachments([]);
+    setError(null);
+  }, []);
+
   return (
     <section className="chat-panel">
       <header>
@@ -541,6 +553,17 @@ export function ChatPanel() {
             >
               <option value="melaleuca">Melaleuca</option>
               <option value="riverbend">Riverbend Ranch</option>
+            </select>
+          </label>
+          <label>
+            Model
+            <select
+              value={adminModelPreset}
+              onChange={(event) => handleModelPresetChange(event.target.value as AdminModelPreset)}
+            >
+              <option value="gpt-4.1">gpt-4.1</option>
+              <option value="gpt-5.1-none">gpt-5.1-none</option>
+              <option value="gpt-5.1-low">gpt-5.1-low</option>
             </select>
           </label>
           <button
