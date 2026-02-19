@@ -108,6 +108,17 @@ const readFileAsDataURL = (file: File): Promise<string> => {
   });
 };
 
+const mapBackendModelToAdminPreset = (model: string | undefined): AdminModelPreset | null => {
+  const normalized = (model ?? '').trim().toLowerCase();
+  if (normalized === 'gpt-4.1') {
+    return 'gpt-4.1';
+  }
+  if (normalized === 'gpt-5.1') {
+    return 'gpt-5.1-none';
+  }
+  return null;
+};
+
 export function ChatPanel() {
   const [topicHint, setTopicHint] = useState<'melaleuca' | 'riverbend'>('melaleuca');
   const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-4.1');
@@ -126,6 +137,7 @@ export function ChatPanel() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const pendingIdsRef = useRef<{ user?: string; assistant?: string }>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const hasManualModelSelectionRef = useRef(false);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -136,6 +148,33 @@ export function ChatPanel() {
       stopVoiceSession();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const syncPresetFromBackend = async () => {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) {
+          return;
+        }
+        const data = (await res.json()) as { ok?: boolean; model?: string };
+        if (!data.ok || hasManualModelSelectionRef.current || cancelled) {
+          return;
+        }
+        const mappedPreset = mapBackendModelToAdminPreset(data.model);
+        if (mappedPreset) {
+          setAdminModelPreset(mappedPreset);
+        }
+      } catch {
+        // If status probing fails, keep the local default preset.
+      }
+    };
+
+    void syncPresetFromBackend();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleAttachmentButton = useCallback(() => {
@@ -532,6 +571,7 @@ export function ChatPanel() {
   }, []);
 
   const handleModelPresetChange = useCallback((value: AdminModelPreset) => {
+    hasManualModelSelectionRef.current = true;
     setAdminModelPreset(value);
     // Model changes should start a fresh thread for clean A/B comparisons.
     setPreviousResponseId(null);
