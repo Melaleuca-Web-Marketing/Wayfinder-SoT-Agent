@@ -416,6 +416,25 @@ function buildRetryUserContent(userContent: ResponseInputMessageContentList): Re
   });
 }
 
+function buildCsrRetryUserContent(userContent: ResponseInputMessageContentList): ResponseInputMessageContentList {
+  return userContent.map((piece) => {
+    if (piece.type !== 'input_text') {
+      return piece;
+    }
+
+    return {
+      ...piece,
+      text:
+        `${piece.text}\n\n` +
+        'Retry instruction: The previous attempt lacked verified US sources. ' +
+        'Run web_search again with strict US bias. ' +
+        'Prefer www.melaleuca.com pages and cdnsc1.melaleuca.com/na/ documents only. ' +
+        'Ignore non-US locale pages and non-US subdomains. ' +
+        'If no US-verified source is found, respond exactly with "No verified sources found."',
+    };
+  });
+}
+
 function extractFirstMessageText(response: Response): string {
   for (const item of response.output ?? []) {
     if (item.type === 'message') {
@@ -506,6 +525,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
         agent_profile: agentProfile,
         ...(metadataExtras ?? {}),
       },
+      ...(agentProfile === 'csr' ? { temperature: 0.2 } : {}),
       ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
       ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
     }) as const;
@@ -556,6 +576,40 @@ export async function ask(params: AskParams): Promise<AskResult> {
       finalAnswer = retryFinalAnswer;
     } catch (error) {
       console.warn('Retry after source fallback failed:', error);
+    }
+  }
+
+  if (agentProfile === 'csr' && isSourceFallbackAnswer(finalAnswer)) {
+    const retryContent = buildCsrRetryUserContent(userContent);
+    const retryRequestBase = buildRequestBase(retryContent, { retry_after_csr_us_fallback: '1' });
+
+    try {
+      const retrySetup = buildTools(params.vectorStoreIds, domainConfig);
+      const retryResponse = await createResponseWithCompatibilityFallback(
+        retryRequestBase,
+        retrySetup,
+        params.vectorStoreIds,
+        domainConfig,
+      );
+      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retryFinalAnswer = enforceSourceAllowlist(
+        retryAnswerWithSources,
+        domainConfig,
+        agentProfile,
+        retryResponse,
+        params.images,
+        imageInsights,
+      );
+
+      if (!hasSourcesSection(retryAnswerWithSources)) {
+        console.warn('Model CSR retry response missing Sources section.');
+      }
+
+      response = retryResponse;
+      answerWithSources = retryAnswerWithSources;
+      finalAnswer = retryFinalAnswer;
+    } catch (error) {
+      console.warn('CSR retry after US source fallback failed:', error);
     }
   }
 
@@ -809,13 +863,54 @@ function extractSourceEntries(answer: string): string[] {
 function isAllowedSource(url: string, allowedDomains: string[]): boolean {
   try {
     const parsed = new URL(url);
-    const hostPath = `${parsed.hostname}${parsed.pathname}`
-      .replace(/^www\./, '')
-      .replace(/\/$/, '');
-    return allowedDomains.some((domain) => hostPath.startsWith(stripScheme(domain)));
+    const host = parsed.hostname.replace(/^www\./, '').toLowerCase();
+    const hostAllowed = allowedDomains.some((domain) => host === normalizeAllowedDomainHost(domain));
+    if (!hostAllowed) {
+      return false;
+    }
+    return isUsCompatibleSource(parsed);
   } catch {
     return false;
   }
+}
+
+function normalizeAllowedDomainHost(domain: string): string {
+  return stripScheme(domain).split('/')[0].replace(/^www\./, '').toLowerCase().trim();
+}
+
+function isUsCompatibleSource(url: URL): boolean {
+  const host = url.hostname.replace(/^www\./, '').toLowerCase();
+  const path = url.pathname.toLowerCase();
+  const firstSegment = path.split('/').filter(Boolean)[0] ?? '';
+
+  if (host === 'cdnsc1.melaleuca.com') {
+    if (!firstSegment) {
+      return true;
+    }
+    return firstSegment === 'na';
+  }
+
+  if (host !== 'melaleuca.com') {
+    return true;
+  }
+
+  const disallowedTopLevelLocales = new Set([
+    'es-us',
+    'au-nz',
+    'newzealand',
+    'sg',
+    'my',
+    'kr',
+    'tw',
+    'fr-ca',
+  ]);
+
+  if (disallowedTopLevelLocales.has(firstSegment)) {
+    return false;
+  }
+
+  const disallowedLocalePathPrefixes = ['/es-us/', '/fr-ca/', '/zh-tw/'];
+  return disallowedLocalePathPrefixes.every((prefix) => !path.startsWith(prefix));
 }
 
 function matchesAttachmentEntry(entry: string, attachments: AskImage[], insights?: ImageInsight[] | undefined): boolean {
