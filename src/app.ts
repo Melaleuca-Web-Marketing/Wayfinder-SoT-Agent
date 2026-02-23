@@ -18,6 +18,15 @@ import {
   vectorStoreClient,
 } from './vectorStore.js';
 import { settings } from './config.js';
+import {
+  getTelemetrySessionDetail,
+  isTelemetryNotFoundError,
+  listTelemetrySessions,
+  recordTelemetryFeedback,
+  recordTelemetryTurn,
+  startTelemetrySession,
+  type TelemetryRating,
+} from './telemetryStore.js';
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 const serverlessClientDir = path.resolve(moduleDir, '..', 'serverless', 'client');
@@ -41,6 +50,8 @@ const MAX_MESSAGE_CHARS = Number(process.env.MAX_MESSAGE_CHARS ?? '2000');
 const MAX_MESSAGE_URLS = Number(process.env.MAX_MESSAGE_URLS ?? '20');
 const MAX_MESSAGE_IMAGES = Number(process.env.MAX_MESSAGE_IMAGES ?? '3');
 const MAX_IMAGE_BYTES = Number(process.env.MAX_IMAGE_BYTES ?? String(4 * 1024 * 1024));
+const MAX_TELEMETRY_TEXT_CHARS = Number(process.env.MAX_TELEMETRY_TEXT_CHARS ?? '12000');
+const MAX_TELEMETRY_COMMENT_CHARS = Number(process.env.MAX_TELEMETRY_COMMENT_CHARS ?? '2000');
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -56,6 +67,7 @@ const OUT_OF_SCOPE_PATTERN =
 const FALLBACK_MESSAGE =
   "I'm built to answer questions about Melaleuca, Riverbend Ranch, and the R3 program. Please ask about those topics.";
 const ALLOWED_AGENT_PROFILES = new Set<AgentProfile>(['admin', 'csr']);
+const ALLOWED_TELEMETRY_FEEDBACK_RATINGS = new Set<TelemetryRating>(['up', 'down']);
 type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
 const ALLOWED_ADMIN_MODEL_PRESETS = new Set<AdminModelPreset>(['gpt-4.1', 'gpt-5.1-none', 'gpt-5.1-low']);
 const ADMIN_MODEL_PRESET_GPT_4_1 = process.env.ADMIN_MODEL_PRESET_GPT_4_1 ?? 'gpt-4.1';
@@ -105,6 +117,235 @@ export function createApp(): express.Express {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       res.status(500).json({ ok: false, error: message });
+    }
+  });
+
+  app.post('/api/telemetry/session', async (req, res) => {
+    const { agentProfile, clientApp, clientSessionId, metadata } = req.body ?? {};
+
+    if (agentProfile != null && typeof agentProfile !== 'string') {
+      res.status(400).json({ error: 'agentProfile must be a string' });
+      return;
+    }
+
+    if (clientApp != null && typeof clientApp !== 'string') {
+      res.status(400).json({ error: 'clientApp must be a string' });
+      return;
+    }
+
+    if (clientSessionId != null && typeof clientSessionId !== 'string') {
+      res.status(400).json({ error: 'clientSessionId must be a string' });
+      return;
+    }
+
+    if (metadata != null && !isPlainObject(metadata)) {
+      res.status(400).json({ error: 'metadata must be an object' });
+      return;
+    }
+
+    const resolvedAgentProfile = sanitizeOptionalString(agentProfile) ?? 'csr';
+    try {
+      const session = await startTelemetrySession({
+        agentProfile: resolvedAgentProfile,
+        clientApp: sanitizeOptionalString(clientApp),
+        clientSessionId: sanitizeOptionalString(clientSessionId),
+        userAgent: req.get('user-agent') ?? undefined,
+        metadata: metadata as Record<string, unknown> | undefined,
+      });
+
+      res.status(201).json({
+        sessionId: session.id,
+        createdAt: session.createdAt,
+      });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: messageText });
+    }
+  });
+
+  app.post('/api/telemetry/turn', async (req, res) => {
+    const {
+      sessionId,
+      question,
+      answer,
+      responseMs,
+      model,
+      topicHint,
+      responseId,
+      requestedAt,
+      respondedAt,
+      metadata,
+    } = req.body ?? {};
+
+    if (typeof sessionId !== 'string' || !sessionId.trim()) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+
+    if (typeof question !== 'string' || !question.trim()) {
+      res.status(400).json({ error: 'question is required' });
+      return;
+    }
+
+    if (typeof answer !== 'string' || !answer.trim()) {
+      res.status(400).json({ error: 'answer is required' });
+      return;
+    }
+
+    if (question.length > MAX_TELEMETRY_TEXT_CHARS || answer.length > MAX_TELEMETRY_TEXT_CHARS) {
+      res.status(400).json({ error: `question/answer too long. Limit is ${MAX_TELEMETRY_TEXT_CHARS} characters.` });
+      return;
+    }
+
+    if (responseMs != null && (!Number.isFinite(responseMs) || Number(responseMs) < 0)) {
+      res.status(400).json({ error: 'responseMs must be a positive number' });
+      return;
+    }
+
+    if (model != null && typeof model !== 'string') {
+      res.status(400).json({ error: 'model must be a string' });
+      return;
+    }
+
+    if (topicHint != null && typeof topicHint !== 'string') {
+      res.status(400).json({ error: 'topicHint must be a string' });
+      return;
+    }
+
+    if (responseId != null && typeof responseId !== 'string') {
+      res.status(400).json({ error: 'responseId must be a string' });
+      return;
+    }
+
+    if (requestedAt != null && typeof requestedAt !== 'string') {
+      res.status(400).json({ error: 'requestedAt must be a string' });
+      return;
+    }
+
+    if (respondedAt != null && typeof respondedAt !== 'string') {
+      res.status(400).json({ error: 'respondedAt must be a string' });
+      return;
+    }
+
+    if (metadata != null && !isPlainObject(metadata)) {
+      res.status(400).json({ error: 'metadata must be an object' });
+      return;
+    }
+
+    try {
+      const turn = await recordTelemetryTurn({
+        sessionId: sessionId.trim(),
+        question: question.trim(),
+        answer: answer.trim(),
+        responseMs: responseMs != null ? Math.round(Number(responseMs)) : undefined,
+        model: sanitizeOptionalString(model),
+        topicHint: sanitizeOptionalString(topicHint),
+        responseId: sanitizeOptionalString(responseId),
+        requestedAt: sanitizeOptionalString(requestedAt),
+        respondedAt: sanitizeOptionalString(respondedAt),
+        metadata: metadata as Record<string, unknown> | undefined,
+      });
+
+      res.status(201).json({
+        turnId: turn.id,
+        createdAt: turn.createdAt,
+      });
+    } catch (error) {
+      if (isTelemetryNotFoundError(error)) {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      const messageText = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: messageText });
+    }
+  });
+
+  app.post('/api/telemetry/feedback', async (req, res) => {
+    const { turnId, rating, comment } = req.body ?? {};
+
+    if (typeof turnId !== 'string' || !turnId.trim()) {
+      res.status(400).json({ error: 'turnId is required' });
+      return;
+    }
+
+    if (typeof rating !== 'string') {
+      res.status(400).json({ error: 'rating is required' });
+      return;
+    }
+
+    const normalizedRating = rating.trim().toLowerCase() as TelemetryRating;
+    if (!ALLOWED_TELEMETRY_FEEDBACK_RATINGS.has(normalizedRating)) {
+      res.status(400).json({ error: 'rating must be one of: up, down' });
+      return;
+    }
+
+    if (comment != null && typeof comment !== 'string') {
+      res.status(400).json({ error: 'comment must be a string' });
+      return;
+    }
+
+    const normalizedComment = sanitizeOptionalString(comment);
+    if (normalizedComment && normalizedComment.length > MAX_TELEMETRY_COMMENT_CHARS) {
+      res.status(400).json({ error: `comment too long. Limit is ${MAX_TELEMETRY_COMMENT_CHARS} characters.` });
+      return;
+    }
+
+    if (normalizedRating === 'down' && !normalizedComment) {
+      res.status(400).json({ error: 'comment is required when rating is down' });
+      return;
+    }
+
+    try {
+      const feedback = await recordTelemetryFeedback({
+        turnId: turnId.trim(),
+        rating: normalizedRating,
+        comment: normalizedRating === 'up' ? undefined : normalizedComment,
+      });
+      res.status(201).json({
+        turnId: feedback.turnId,
+        rating: feedback.rating,
+        updatedAt: feedback.updatedAt,
+      });
+    } catch (error) {
+      if (isTelemetryNotFoundError(error)) {
+        res.status(404).json({ error: error.message });
+        return;
+      }
+      const messageText = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: messageText });
+    }
+  });
+
+  app.get('/api/telemetry/sessions', async (req, res) => {
+    const requestedLimit = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(requestedLimit, 200)) : 50;
+
+    try {
+      const sessions = await listTelemetrySessions(limit);
+      res.json({ sessions });
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: messageText });
+    }
+  });
+
+  app.get('/api/telemetry/sessions/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId?.trim();
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+
+    try {
+      const detail = await getTelemetrySessionDetail(sessionId);
+      if (!detail) {
+        res.status(404).json({ error: `Session ${sessionId} not found.` });
+        return;
+      }
+      res.json(detail);
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: messageText });
     }
   });
 
@@ -412,6 +653,18 @@ function ensureHttps(domainOrUrl: string): string {
   }
 
   return `https://${domainOrUrl.replace(/^https?:\/\//, '')}`;
+}
+
+function sanitizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeIncomingImages(rawImages: unknown): AskImage[] {

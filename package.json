@@ -29,10 +29,12 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "multer": "^2.0.2",
-    "openai": "^4.52.3"
+    "openai": "^4.52.3",
+    "pg": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20.12.7",
+    "@types/pg": "^8.16.0",
     "esbuild": "^0.25.10",
     "tsx": "^4.7.0",
     "typescript": "^5.4.5"

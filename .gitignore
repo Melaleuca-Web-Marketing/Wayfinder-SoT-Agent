@@ -8,6 +8,7 @@ client/dist/
 uploads/
 _uploads/
 .uploads/
+.telemetry/
 *.log
 .vector-store.json
 authcookie.sh

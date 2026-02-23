@@ -88,13 +88,20 @@ The backend exposes JSON endpoints under `/api` so any client (admin UI, widget,
 | --- | --- | --- |
 | `GET` | `/api/status` | Health probe. Returns `{ ok: true, model: "<id>" }` when the OpenAI Responses API is reachable. |
 | `POST` | `/api/chat` | Main chat endpoint. Body: `{ message: string, topicHint?: "melaleuca" \| "riverbend", history?: ConversationTurn[], images?: Base64Image[], vectorStoreIds?: string[], previousResponseId?: string, agentProfile?: "admin" \| "csr", adminModelPreset?: "gpt-4.1" \| "gpt-5.1-none" \| "gpt-5.1-low" }`. Responds with `{ answer, response, responseId }`, where `response` is the raw Responses API payload (including tool calls and citations). `adminModelPreset` is ignored for `csr` profile calls. |
+| `POST` | `/api/telemetry/session` | Starts a chat-review session. Body: `{ agentProfile?: string, clientApp?: string, clientSessionId?: string, metadata?: object }`. Responds with `{ sessionId, createdAt }`. |
+| `POST` | `/api/telemetry/turn` | Stores one Q/A turn. Body: `{ sessionId, question, answer, responseMs?: number, model?: string, topicHint?: string, responseId?: string, requestedAt?: ISOString, respondedAt?: ISOString, metadata?: object }`. Responds with `{ turnId, createdAt }`. |
+| `POST` | `/api/telemetry/feedback` | Stores thumbs feedback for a turn. Body: `{ turnId, rating: "up" \| "down", comment?: string }`. For `down`, comment is required. Responds with `{ turnId, rating, updatedAt }`. |
+| `GET` | `/api/telemetry/sessions?limit=50` | Lists recent sessions with rollups (`turnCount`, `thumbsUpCount`, `thumbsDownCount`, `lastTurnAt`). |
+| `GET` | `/api/telemetry/sessions/:sessionId` | Returns one session plus ordered turns and attached feedback entries. |
 | `POST` | `/api/realtime/token` | Creates a short-lived Realtime session for voice calls. The widget/admin UI exchanges the token with the browser Realtime SDK. |
 | `GET` | `/api/vector/store` | Returns the active vector store metadata (`{ id, name, file_count }`). |
 | `GET` | `/api/vector/files` | Lists the most recent files attached to the store with status + error fields. |
 | `POST` | `/api/vector/upload` | Multipart upload (`file` field) for PDFs/Markdown. Streams the document to OpenAI, attaches it to the active vector store, and returns both the OpenAI file id and vector-store-file id. |
 | `DELETE` | `/api/vector/files/:fileId` | Removes a document from the active vector store. |
 
-All endpoints require the same `.env` configuration described earlier (`OPENAI_API_KEY`, vector store settings, rate-limit knobs). During development the admin UI proxies calls to `localhost:4001`, so you can test against these endpoints with tools like `curl` or Postman.
+All endpoints require the same `.env` configuration described earlier (`OPENAI_API_KEY`, vector store settings, rate-limit knobs). Telemetry storage uses `TELEMETRY_DATABASE_URL` when set (recommended for Vercel), otherwise it falls back to a local JSON file (`TELEMETRY_FILE_PATH` or `.telemetry/telemetry-store.json` in local dev). During development the admin UI proxies calls to `localhost:4001`, so you can test against these endpoints with tools like `curl` or Postman.
+
+For CSR frontend wiring details (response-time UI + thumbs + telemetry posting), use `CSR_CODEX_TELEMETRY_INSTRUCTIONS.md`.
 
 ## Security Guardrails (MVP)
 
