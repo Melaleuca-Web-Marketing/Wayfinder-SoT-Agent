@@ -525,7 +525,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     console.warn('Model response missing Sources section.');
   }
 
-  if (isSourceFallbackAnswer(finalAnswer) && hasFileSearchTool(toolSetup)) {
+  if (agentProfile === 'admin' && isSourceFallbackAnswer(finalAnswer) && hasFileSearchTool(toolSetup)) {
     const retryContent = buildRetryUserContent(userContent);
     const retryRequestBase = buildRequestBase(retryContent, { retry_after_source_fallback: '1' });
 
@@ -716,16 +716,18 @@ function enforceSourceAllowlist(
   attachments?: AskImage[] | undefined,
   insights?: ImageInsight[] | undefined,
 ): string {
-  const entries = extractSourceEntries(answer);
-  const urls = extractUrls(answer);
+  const effectiveAllowedDomains = getEffectiveAllowedDomains(domainConfig);
+  const sanitizedAnswer = stripDisallowedUrlLines(answer, effectiveAllowedDomains);
+  const entries = extractSourceEntries(sanitizedAnswer);
+  const urls = extractUrls(sanitizedAnswer);
 
-  const hasAllowedUrl = urls.some((url) => isAllowedSource(url, domainConfig.preferredDomains));
+  const hasAllowedUrl = urls.some((url) => isAllowedSource(url, effectiveAllowedDomains));
   const hasFileCitation =
     entries.some((entry) => /file-[a-zA-Z0-9]/.test(entry)) || responseContainsFileCitation(response);
   const hasAttachmentCitation = attachments ? entries.some((entry) => matchesAttachmentEntry(entry, attachments, insights)) : false;
 
   if (hasAllowedUrl || hasFileCitation || hasAttachmentCitation) {
-    return answer;
+    return sanitizedAnswer;
   }
 
   if (agentProfile === 'csr') {
@@ -734,6 +736,36 @@ function enforceSourceAllowlist(
 
   const fallback = domainConfig.fallbackUrl;
   return `${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallback}.\n\nSources:\n- ${fallback}`;
+}
+
+function getEffectiveAllowedDomains(domainConfig: DomainConfig): string[] {
+  if (settings.webSearchAllowedDomains && settings.webSearchAllowedDomains.length > 0) {
+    return settings.webSearchAllowedDomains;
+  }
+  return toAllowedDomains(domainConfig.preferredDomains);
+}
+
+function stripDisallowedUrlLines(answer: string, allowedDomains: string[]): string {
+  if (!answer.trim()) {
+    return answer;
+  }
+
+  const filtered = answer
+    .split('\n')
+    .filter((line) => lineHasOnlyAllowedUrls(line, allowedDomains))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return filtered || answer.trim();
+}
+
+function lineHasOnlyAllowedUrls(line: string, allowedDomains: string[]): boolean {
+  const urls = extractUrls(line);
+  if (urls.length === 0) {
+    return true;
+  }
+  return urls.every((url) => isAllowedSource(url, allowedDomains));
 }
 
 function escapeRegExp(value: string): string {
