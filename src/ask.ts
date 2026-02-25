@@ -16,6 +16,7 @@ export interface AskParams {
   images?: AskImage[];
   previousResponseId?: string;
   agentProfile?: AgentProfile;
+  onProgress?: (event: AskProgressEvent) => void;
 }
 
 export interface AskResult {
@@ -36,6 +37,17 @@ export interface AskMetrics {
   initialResponseMs: number;
   retries: AskRetryMetric[];
   totalMs: number;
+}
+
+export interface AskProgressEvent {
+  stage:
+    | 'initial_response_start'
+    | 'initial_response_complete'
+    | 'admin_retry_start'
+    | 'admin_retry_complete'
+    | 'csr_retry_start'
+    | 'csr_retry_complete'
+    | 'done';
 }
 
 export interface ConversationTurn {
@@ -562,6 +574,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const requestBase = buildRequestBase(userContent);
 
   const initialResponseStartMs = Date.now();
+  params.onProgress?.({ stage: 'initial_response_start' });
   let response = await createResponseWithCompatibilityFallback(
     requestBase,
     toolSetup,
@@ -569,6 +582,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     domainConfig,
   );
   metrics.initialResponseMs = Date.now() - initialResponseStartMs;
+  params.onProgress?.({ stage: 'initial_response_complete' });
 
   let answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
   let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, agentProfile, response, params.images, imageInsights);
@@ -586,6 +600,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     const retryContent = buildRetryUserContent(userContent);
     const retryRequestBase = buildRequestBase(retryContent, { retry_after_source_fallback: '1' });
     const retryStartMs = Date.now();
+    params.onProgress?.({ stage: 'admin_retry_start' });
 
     try {
       retryMetric.attempted = true;
@@ -615,9 +630,11 @@ export async function ask(params: AskParams): Promise<AskResult> {
       finalAnswer = retryFinalAnswer;
       retryMetric.succeeded = true;
       retryMetric.durationMs = Date.now() - retryStartMs;
+      params.onProgress?.({ stage: 'admin_retry_complete' });
     } catch (error) {
       retryMetric.durationMs = Date.now() - retryStartMs;
       console.warn('Retry after source fallback failed:', error);
+      params.onProgress?.({ stage: 'admin_retry_complete' });
     }
   }
 
@@ -631,6 +648,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     const retryContent = buildCsrRetryUserContent(userContent);
     const retryRequestBase = buildRequestBase(retryContent, { retry_after_csr_us_fallback: '1' });
     const retryStartMs = Date.now();
+    params.onProgress?.({ stage: 'csr_retry_start' });
 
     try {
       retryMetric.attempted = true;
@@ -660,13 +678,16 @@ export async function ask(params: AskParams): Promise<AskResult> {
       finalAnswer = retryFinalAnswer;
       retryMetric.succeeded = true;
       retryMetric.durationMs = Date.now() - retryStartMs;
+      params.onProgress?.({ stage: 'csr_retry_complete' });
     } catch (error) {
       retryMetric.durationMs = Date.now() - retryStartMs;
       console.warn('CSR retry after US source fallback failed:', error);
+      params.onProgress?.({ stage: 'csr_retry_complete' });
     }
   }
 
   metrics.totalMs = Date.now() - askStartMs;
+  params.onProgress?.({ stage: 'done' });
 
   return {
     answer: finalAnswer,

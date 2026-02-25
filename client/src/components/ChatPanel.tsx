@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, FormEvent } from 'react';
 import {
-  sendChatRequest,
+  sendChatRequestWithProgress,
   fetchRealtimeToken,
   type ChatRequestBody,
+  type ChatProgressEvent,
   type ChatResponseBody,
 } from '../../../shared/agentClient';
 
@@ -125,6 +126,7 @@ export function ChatPanel() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
+  const [chatProgressMessage, setChatProgressMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previousResponseId, setPreviousResponseId] = useState<string | null>(null);
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>('idle');
@@ -371,6 +373,7 @@ export function ChatPanel() {
       setMessages(nextMessages);
       setAttachments([]);
       setLoading(true);
+      setChatProgressMessage('Running safety checks...');
 
       try {
         const requestBody: ChatRequestBody = {
@@ -382,7 +385,13 @@ export function ChatPanel() {
           adminModelPreset,
           ...(previousResponseId ? { previousResponseId } : {}),
         };
-        const data: ChatResponseBody = await sendChatRequest(requestBody);
+        const data: ChatResponseBody = await sendChatRequestWithProgress(requestBody, (event: ChatProgressEvent) => {
+          if (event.type === 'status') {
+            setChatProgressMessage(event.message);
+          } else if (event.type === 'result') {
+            setChatProgressMessage('Finalizing response...');
+          }
+        });
         setMessages([...nextMessages, { id: makeId(), role: 'assistant', content: data.answer }]);
         const responseId =
           data.responseId ??
@@ -394,6 +403,7 @@ export function ChatPanel() {
         setError(err instanceof Error ? err.message : 'Chat request failed');
       } finally {
         setLoading(false);
+        setChatProgressMessage(null);
       }
     },
     [adminModelPreset, attachments, input, loading, messages, previousResponseId, topicHint],
@@ -677,7 +687,7 @@ export function ChatPanel() {
         {loading && (
           <div className="chat-turn assistant">
             <div className="chat-role">Assistant</div>
-            <div className="chat-content">Thinking…</div>
+            <div className="chat-content">{chatProgressMessage ?? 'Thinking…'}</div>
           </div>
         )}
         <div ref={endRef} />
