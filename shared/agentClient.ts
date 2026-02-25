@@ -27,6 +27,36 @@ export interface ChatResponseBody {
   answer: string;
   response?: unknown;
   responseId?: string;
+  metrics?: {
+    totalMs?: number;
+    moderationMs?: number;
+    vectorStoreMs?: number;
+    askMs?: number;
+    ask?: {
+      imageAnalysisMs?: number;
+      initialResponseMs?: number;
+      retries?: Array<{
+        reason?: 'admin_source_fallback' | 'csr_source_fallback';
+        attempted?: boolean;
+        succeeded?: boolean;
+        durationMs?: number;
+      }>;
+      totalMs?: number;
+    };
+    retries?: {
+      triggered?: boolean;
+      attemptedCount?: number;
+      successCount?: number;
+    };
+    aggregate?: {
+      totalRequests?: number;
+      retryTriggeredRequests?: number;
+      retryAttemptCount?: number;
+      retrySuccessCount?: number;
+      retryTriggeredRate?: number;
+      retrySuccessRate?: number;
+    };
+  };
 }
 
 const DEFAULT_HEADERS = {

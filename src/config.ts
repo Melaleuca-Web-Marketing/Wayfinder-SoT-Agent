@@ -4,6 +4,11 @@ loadEnv();
 
 type TopicHint = 'melaleuca' | 'riverbend';
 
+function parseNonNegativeNumber(raw: string | undefined, fallback: number): number {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function parseVectorStoreIds(raw: string | undefined): string[] {
   return (raw ?? '')
     .split(',')
@@ -68,6 +73,8 @@ const vectorUrlAllowlist = parseDomainAllowlist(process.env.VECTOR_URL_ALLOWLIST
 
 export const settings = {
   model: process.env.OPENAI_MODEL ?? 'gpt-4.1',
+  openAiRequestTimeoutMs: parseNonNegativeNumber(process.env.OPENAI_REQUEST_TIMEOUT_MS, 60000),
+  openAiMaxRetries: parseNonNegativeNumber(process.env.OPENAI_MAX_RETRIES, 0),
   primaryDomain,
   riverbendDomain,
   webCacheTtlSeconds: Number(process.env.WEB_CACHE_TTL_SECONDS ?? '86400'),

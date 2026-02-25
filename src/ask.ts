@@ -21,6 +21,21 @@ export interface AskParams {
 export interface AskResult {
   answer: string;
   response: Response;
+  metrics: AskMetrics;
+}
+
+export interface AskRetryMetric {
+  reason: 'admin_source_fallback' | 'csr_source_fallback';
+  attempted: boolean;
+  succeeded: boolean;
+  durationMs?: number;
+}
+
+export interface AskMetrics {
+  imageAnalysisMs: number;
+  initialResponseMs: number;
+  retries: AskRetryMetric[];
+  totalMs: number;
 }
 
 export interface ConversationTurn {
@@ -47,7 +62,11 @@ interface ImageInsight {
   keywords: string[];
 }
 
-const client = new OpenAI({ apiKey: requireApiKey() });
+const client = new OpenAI({
+  apiKey: requireApiKey(),
+  timeout: settings.openAiRequestTimeoutMs,
+  maxRetries: settings.openAiMaxRetries,
+});
 const ADMIN_FALLBACK_MESSAGE_PREFIX = "I couldn't confirm from our site or files.";
 const CSR_FALLBACK_MESSAGE = 'No verified sources found.';
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? '6000');
@@ -464,11 +483,19 @@ function extractAssistantMessages(response: Response): string[] {
 }
 
 export async function ask(params: AskParams): Promise<AskResult> {
+  const askStartMs = Date.now();
   const message = params.message.trim();
   const hasImages = Array.isArray(params.images) && params.images.length > 0;
   if (!message && !hasImages) {
     throw new Error('Message or images must be provided');
   }
+
+  const metrics: AskMetrics = {
+    imageAnalysisMs: 0,
+    initialResponseMs: 0,
+    retries: [],
+    totalMs: 0,
+  };
 
   const topic = params.topicHint ?? inferTopicHint(message);
   const agentProfile = params.agentProfile ?? 'admin';
@@ -477,7 +504,9 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const toolSetup = buildTools(params.vectorStoreIds, domainConfig);
   const systemPrompt = buildSystemPrompt(domainConfig, agentProfile);
 
+  const imageAnalysisStartMs = Date.now();
   const imageInsights = hasImages ? await extractImageInsights(params.images ?? [], topic) : [];
+  metrics.imageAnalysisMs = Date.now() - imageAnalysisStartMs;
   const historyTranscript = params.previousResponseId ? null : formatHistory(params.history ?? []);
   const userText = message.length > 0 ? message : 'Please review the attached image(s) and provide your findings.';
 
@@ -532,12 +561,14 @@ export async function ask(params: AskParams): Promise<AskResult> {
 
   const requestBase = buildRequestBase(userContent);
 
+  const initialResponseStartMs = Date.now();
   let response = await createResponseWithCompatibilityFallback(
     requestBase,
     toolSetup,
     params.vectorStoreIds,
     domainConfig,
   );
+  metrics.initialResponseMs = Date.now() - initialResponseStartMs;
 
   let answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
   let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, agentProfile, response, params.images, imageInsights);
@@ -546,10 +577,18 @@ export async function ask(params: AskParams): Promise<AskResult> {
   }
 
   if (agentProfile === 'admin' && isSourceFallbackAnswer(finalAnswer) && hasFileSearchTool(toolSetup)) {
+    const retryMetric: AskRetryMetric = {
+      reason: 'admin_source_fallback',
+      attempted: false,
+      succeeded: false,
+    };
+    metrics.retries.push(retryMetric);
     const retryContent = buildRetryUserContent(userContent);
     const retryRequestBase = buildRequestBase(retryContent, { retry_after_source_fallback: '1' });
+    const retryStartMs = Date.now();
 
     try {
+      retryMetric.attempted = true;
       const retrySetup = buildTools(params.vectorStoreIds, domainConfig);
       const retryResponse = await createResponseWithCompatibilityFallback(
         retryRequestBase,
@@ -574,16 +613,27 @@ export async function ask(params: AskParams): Promise<AskResult> {
       response = retryResponse;
       answerWithSources = retryAnswerWithSources;
       finalAnswer = retryFinalAnswer;
+      retryMetric.succeeded = true;
+      retryMetric.durationMs = Date.now() - retryStartMs;
     } catch (error) {
+      retryMetric.durationMs = Date.now() - retryStartMs;
       console.warn('Retry after source fallback failed:', error);
     }
   }
 
   if (agentProfile === 'csr' && isSourceFallbackAnswer(finalAnswer)) {
+    const retryMetric: AskRetryMetric = {
+      reason: 'csr_source_fallback',
+      attempted: false,
+      succeeded: false,
+    };
+    metrics.retries.push(retryMetric);
     const retryContent = buildCsrRetryUserContent(userContent);
     const retryRequestBase = buildRequestBase(retryContent, { retry_after_csr_us_fallback: '1' });
+    const retryStartMs = Date.now();
 
     try {
+      retryMetric.attempted = true;
       const retrySetup = buildTools(params.vectorStoreIds, domainConfig);
       const retryResponse = await createResponseWithCompatibilityFallback(
         retryRequestBase,
@@ -608,14 +658,20 @@ export async function ask(params: AskParams): Promise<AskResult> {
       response = retryResponse;
       answerWithSources = retryAnswerWithSources;
       finalAnswer = retryFinalAnswer;
+      retryMetric.succeeded = true;
+      retryMetric.durationMs = Date.now() - retryStartMs;
     } catch (error) {
+      retryMetric.durationMs = Date.now() - retryStartMs;
       console.warn('CSR retry after US source fallback failed:', error);
     }
   }
 
+  metrics.totalMs = Date.now() - askStartMs;
+
   return {
     answer: finalAnswer,
     response,
+    metrics,
   };
 }
 
@@ -932,14 +988,13 @@ function matchesAttachmentEntry(entry: string, attachments: AskImage[], insights
 }
 
 async function extractImageInsights(images: AskImage[], topic: TopicHint): Promise<ImageInsight[]> {
-  const insights: ImageInsight[] = [];
   const instructions =
     'You are an assistant that extracts structured facts from product or marketing photos. ' +
     'Return concise JSON with fields: "summary" (two short sentences describing the product and notable claims), ' +
     '"visible_text" (array of distinct text snippets that appear on the packaging), and "key_terms" (array of 2-5 keywords useful for search). ' +
     'Only include text that is actually visible. Do not hallucinate brand names.';
 
-  for (const [index, image] of images.entries()) {
+  const insightTasks = images.map(async (image, index): Promise<ImageInsight | null> => {
     try {
       const response = await client.responses.create(
         {
@@ -981,18 +1036,20 @@ async function extractImageInsights(images: AskImage[], topic: TopicHint): Promi
 
       const raw = normalizeAnswer(response);
       const parsed = parseImageInsight(raw);
-      insights.push({
+      return {
         label: image.name ?? `Uploaded image ${index + 1}`,
         summary: parsed.summary,
         textSnippets: parsed.textSnippets,
         keywords: parsed.keywords,
-      });
+      };
     } catch (error) {
       console.warn(`Image analysis failed for attachment ${index}:`, error);
+      return null;
     }
-  }
+  });
 
-  return insights;
+  const insightResults = await Promise.all(insightTasks);
+  return insightResults.filter((insight): insight is ImageInsight => insight !== null);
 }
 
 function parseImageInsight(value: string): { summary: string; textSnippets: string[]; keywords: string[] } {

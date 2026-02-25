@@ -87,7 +87,7 @@ The backend exposes JSON endpoints under `/api` so any client (admin UI, widget,
 | Method | Path | Description |
 | --- | --- | --- |
 | `GET` | `/api/status` | Health probe. Returns `{ ok: true, model: "<id>" }` when the OpenAI Responses API is reachable. |
-| `POST` | `/api/chat` | Main chat endpoint. Body: `{ message: string, topicHint?: "melaleuca" \| "riverbend", history?: ConversationTurn[], images?: Base64Image[], vectorStoreIds?: string[], previousResponseId?: string, agentProfile?: "admin" \| "csr", adminModelPreset?: "gpt-4.1" \| "gpt-5.1-none" \| "gpt-5.1-low" }`. Responds with `{ answer, response, responseId }`, where `response` is the raw Responses API payload (including tool calls and citations). `adminModelPreset` is ignored for `csr` profile calls. |
+| `POST` | `/api/chat` | Main chat endpoint. Body: `{ message: string, topicHint?: "melaleuca" \| "riverbend", history?: ConversationTurn[], images?: Base64Image[], vectorStoreIds?: string[], previousResponseId?: string, agentProfile?: "admin" \| "csr", adminModelPreset?: "gpt-4.1" \| "gpt-5.1-none" \| "gpt-5.1-low" }`. Responds with `{ answer, response, responseId, metrics }`, where `response` is the raw Responses API payload (including tool calls and citations) and `metrics` includes stage timings/retry counters for latency analysis. `adminModelPreset` is ignored for `csr` profile calls. |
 | `POST` | `/api/telemetry/session` | Starts a chat-review session. Body: `{ agentProfile?: string, clientApp?: string, clientSessionId?: string, metadata?: object }`. Responds with `{ sessionId, createdAt }`. |
 | `POST` | `/api/telemetry/turn` | Stores one Q/A turn. Body: `{ sessionId, question, answer, responseMs?: number, model?: string, topicHint?: string, responseId?: string, requestedAt?: ISOString, respondedAt?: ISOString, metadata?: object }`. Responds with `{ turnId, createdAt }`. |
 | `POST` | `/api/telemetry/feedback` | Stores thumbs feedback for a turn. Body: `{ turnId, rating: "up" \| "down", comment?: string }`. For `down`, comment is required. Responds with `{ turnId, rating, updatedAt }`. |
@@ -112,6 +112,7 @@ The API layer adds baseline protections so prompt/response handling stays on-bra
 - **Moderation + scope guard:** prompts flow through `omni-moderation-latest` and a simple keyword scope filter before any model call.
 - **Rate limits:** per-minute (`RATE_LIMIT_PER_MINUTE`, default 10) and per-day (`RATE_LIMIT_PER_DAY`, default 200) throttles via `express-rate-limit`. Set `DISABLE_RATE_LIMITS=true` for internal testing environments.
 - **Output enforcement:** `ask()` clamps `max_output_tokens` (default 6,000) while forcing a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.
+- **OpenAI request policy:** set `OPENAI_REQUEST_TIMEOUT_MS` (default 60,000) and `OPENAI_MAX_RETRIES` (default 0) to control timeout/fail-fast behavior explicitly.
 
 Tweak the `.env` knobs to adjust these guardrails as you scale.
 

@@ -6,7 +6,7 @@ import path from 'node:path';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { ask, type AgentProfile, type AskImage, type ConversationImage, type ReasoningEffort } from './ask.js';
+import { ask, type AgentProfile, type AskImage, type AskRetryMetric, type ConversationImage, type ReasoningEffort } from './ask.js';
 import {
   getVectorStoreDetails,
   listVectorStoreFiles,
@@ -72,6 +72,12 @@ type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
 const ALLOWED_ADMIN_MODEL_PRESETS = new Set<AdminModelPreset>(['gpt-4.1', 'gpt-5.1-none', 'gpt-5.1-low']);
 const ADMIN_MODEL_PRESET_GPT_4_1 = process.env.ADMIN_MODEL_PRESET_GPT_4_1 ?? 'gpt-4.1';
 const ADMIN_MODEL_PRESET_GPT_5_1 = process.env.ADMIN_MODEL_PRESET_GPT_5_1 ?? 'gpt-5.1';
+const chatPerfAggregate = {
+  totalRequests: 0,
+  retryTriggeredRequests: 0,
+  retryAttemptCount: 0,
+  retrySuccessCount: 0,
+};
 
 function resolveAdminModelPreset(preset: AdminModelPreset): { model: string; reasoningEffort?: ReasoningEffort } {
   switch (preset) {
@@ -350,6 +356,10 @@ export function createApp(): express.Express {
   });
 
   app.post('/api/chat', async (req, res) => {
+    const requestStartMs = Date.now();
+    let moderationMs = 0;
+    let vectorStoreMs = 0;
+    let askMs = 0;
     const {
       message: rawMessage,
       topicHint,
@@ -426,10 +436,12 @@ export function createApp(): express.Express {
     }
 
     try {
+      const moderationStartMs = Date.now();
       const moderation = await vectorStoreClient.moderations.create({
         model: 'omni-moderation-latest',
         input: message,
       });
+      moderationMs = Date.now() - moderationStartMs;
 
       const flagged =
         moderation.results?.some((result: { flagged?: boolean }) => result.flagged === true) ?? false;
@@ -441,7 +453,10 @@ export function createApp(): express.Express {
         return;
       }
 
+      const vectorStoreStartMs = Date.now();
       const vectorStoreId = await ensureVectorStoreId();
+      vectorStoreMs = Date.now() - vectorStoreStartMs;
+      const askStartMs = Date.now();
       const result = await ask({
         message,
         topicHint,
@@ -453,13 +468,51 @@ export function createApp(): express.Express {
         previousResponseId: previousResponseId?.trim() || undefined,
         agentProfile: resolvedAgentProfile,
       });
+      askMs = Date.now() - askStartMs;
+      const retrySummary = summarizeRetryMetrics(result.metrics.retries);
+      const aggregateSnapshot = updateChatPerfAggregate(retrySummary);
+      const totalMs = Date.now() - requestStartMs;
+      const metrics = {
+        totalMs,
+        moderationMs,
+        vectorStoreMs,
+        askMs,
+        ask: result.metrics,
+        retries: retrySummary,
+        aggregate: aggregateSnapshot,
+      };
+
+      console.info(
+        '[chat_perf]',
+        JSON.stringify({
+          status: 'ok',
+          agentProfile: resolvedAgentProfile,
+          topicHint: topicHint ?? null,
+          ...metrics,
+        }),
+      );
 
       res.json({
         answer: result.answer,
         response: result.response,
         responseId: result.response?.id,
+        metrics,
       });
     } catch (error) {
+      const totalMs = Date.now() - requestStartMs;
+      console.error(
+        '[chat_perf]',
+        JSON.stringify({
+          status: 'error',
+          agentProfile: resolvedAgentProfile,
+          topicHint: topicHint ?? null,
+          totalMs,
+          moderationMs,
+          vectorStoreMs,
+          askMs,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }),
+      );
       const messageText = error instanceof Error ? error.message : 'Unknown error';
       res.status(500).json({ error: messageText });
     }
@@ -665,6 +718,51 @@ function sanitizeOptionalString(value: unknown): string | undefined {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function summarizeRetryMetrics(retries: AskRetryMetric[]): {
+  triggered: boolean;
+  attemptedCount: number;
+  successCount: number;
+} {
+  const attemptedCount = retries.filter((retry) => retry.attempted).length;
+  const successCount = retries.filter((retry) => retry.succeeded).length;
+  return {
+    triggered: retries.length > 0,
+    attemptedCount,
+    successCount,
+  };
+}
+
+function updateChatPerfAggregate(retrySummary: { triggered: boolean; attemptedCount: number; successCount: number }): {
+  totalRequests: number;
+  retryTriggeredRequests: number;
+  retryAttemptCount: number;
+  retrySuccessCount: number;
+  retryTriggeredRate: number;
+  retrySuccessRate: number;
+} {
+  chatPerfAggregate.totalRequests += 1;
+  if (retrySummary.triggered) {
+    chatPerfAggregate.retryTriggeredRequests += 1;
+  }
+  chatPerfAggregate.retryAttemptCount += retrySummary.attemptedCount;
+  chatPerfAggregate.retrySuccessCount += retrySummary.successCount;
+
+  const retryTriggeredRate =
+    chatPerfAggregate.totalRequests > 0 ?
+      Number(((chatPerfAggregate.retryTriggeredRequests / chatPerfAggregate.totalRequests) * 100).toFixed(2))
+    : 0;
+  const retrySuccessRate =
+    chatPerfAggregate.retryAttemptCount > 0 ?
+      Number(((chatPerfAggregate.retrySuccessCount / chatPerfAggregate.retryAttemptCount) * 100).toFixed(2))
+    : 0;
+
+  return {
+    ...chatPerfAggregate,
+    retryTriggeredRate,
+    retrySuccessRate,
+  };
 }
 
 function normalizeIncomingImages(rawImages: unknown): AskImage[] {

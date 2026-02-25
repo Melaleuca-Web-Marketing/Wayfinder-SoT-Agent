@@ -7,7 +7,11 @@ import { pipeline } from 'node:stream/promises';
 import { OpenAI, toFile } from 'openai';
 import { requireApiKey, settings } from './config.js';
 
-const client = new OpenAI({ apiKey: requireApiKey() });
+const client = new OpenAI({
+  apiKey: requireApiKey(),
+  timeout: settings.openAiRequestTimeoutMs,
+  maxRetries: settings.openAiMaxRetries,
+});
 const metaFile = path.resolve('.vector-store.json');
 let cachedVectorStoreId: string | null = null;
 const MAX_URL_BYTES = Number(process.env.MAX_URL_BYTES ?? String(5 * 1024 * 1024));
