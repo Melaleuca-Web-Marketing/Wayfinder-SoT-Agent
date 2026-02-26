@@ -82,15 +82,37 @@ type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
 const ALLOWED_ADMIN_MODEL_PRESETS = new Set<AdminModelPreset>(['gpt-4.1', 'gpt-5.1-none', 'gpt-5.1-low']);
 const ADMIN_MODEL_PRESET_GPT_4_1 = process.env.ADMIN_MODEL_PRESET_GPT_4_1 ?? 'gpt-4.1';
 const ADMIN_MODEL_PRESET_GPT_5_1 = process.env.ADMIN_MODEL_PRESET_GPT_5_1 ?? 'gpt-5.1';
-const ENABLE_CHAT_TOKEN_STREAMING = process.env.ENABLE_CHAT_TOKEN_STREAMING === 'true';
-const ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY = process.env.ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY === 'true';
-const ENABLE_CHAT_TOKEN_STREAMING_CSR = process.env.ENABLE_CHAT_TOKEN_STREAMING_CSR !== 'false';
+const ENABLE_CHAT_TOKEN_STREAMING = parseBooleanEnv('ENABLE_CHAT_TOKEN_STREAMING', false);
+const ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY = parseBooleanEnv('ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY', false);
+const ENABLE_CHAT_TOKEN_STREAMING_CSR = parseBooleanEnv('ENABLE_CHAT_TOKEN_STREAMING_CSR', true);
 const chatPerfAggregate = {
   totalRequests: 0,
   retryTriggeredRequests: 0,
   retryAttemptCount: 0,
   retrySuccessCount: 0,
 };
+
+function parseBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw == null) {
+    return fallback;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') {
+    return true;
+  }
+
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') {
+    return false;
+  }
+
+  return fallback;
+}
 
 function resolveAdminModelPreset(preset: AdminModelPreset): { model: string; reasoningEffort?: ReasoningEffort } {
   switch (preset) {
