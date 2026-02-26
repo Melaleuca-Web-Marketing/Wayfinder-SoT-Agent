@@ -19,10 +19,19 @@ export interface AskParams {
   onProgress?: (event: AskProgressEvent) => void;
 }
 
+export interface AskStreamParams extends AskParams {
+  onDraftDelta?: (event: AskDraftDeltaEvent) => void;
+  onDraftRevision?: (event: AskDraftRevisionEvent) => void;
+}
+
 export interface AskResult {
   answer: string;
   response: Response;
   metrics: AskMetrics;
+}
+
+export interface AskStreamResult extends AskResult {
+  streamMetrics: AskStreamMetrics;
 }
 
 export interface AskRetryMetric {
@@ -39,6 +48,13 @@ export interface AskMetrics {
   totalMs: number;
 }
 
+export interface AskStreamMetrics {
+  timeToFirstDeltaMs?: number;
+  draftRevisionCount: number;
+  streamedCharsPass1: number;
+  streamedCharsPass2: number;
+}
+
 export interface AskProgressEvent {
   stage:
     | 'initial_response_start'
@@ -48,6 +64,17 @@ export interface AskProgressEvent {
     | 'csr_retry_start'
     | 'csr_retry_complete'
     | 'done';
+}
+
+export interface AskDraftDeltaEvent {
+  draftId: string;
+  text: string;
+}
+
+export interface AskDraftRevisionEvent {
+  fromDraftId: string;
+  toDraftId: string;
+  reason: 'source_retry' | 'allowlist_replace';
 }
 
 export interface ConversationTurn {
@@ -418,6 +445,75 @@ async function createResponseWithCompatibilityFallback(
   }
 }
 
+interface StreamPassResult {
+  response: Response;
+  streamedChars: number;
+  timeToFirstDeltaMs?: number;
+}
+
+async function createStreamedResponseWithTools(
+  requestBase: Record<string, unknown>,
+  setup: ToolSetup,
+  includeToolResources: boolean,
+  onDelta?: (delta: string) => void,
+): Promise<StreamPassResult> {
+  const streamStartMs = Date.now();
+  let timeToFirstDeltaMs: number | undefined;
+  let streamedChars = 0;
+
+  const payload: Record<string, unknown> = {
+    ...requestBase,
+    tools: setup.tools,
+    stream: true,
+  };
+
+  if (includeToolResources && setup.toolResources) {
+    payload.tool_resources = setup.toolResources as unknown;
+  }
+
+  const stream = client.responses.stream(payload as any);
+  for await (const event of stream) {
+    if (event.type !== 'response.output_text.delta' || typeof event.delta !== 'string' || event.delta.length === 0) {
+      continue;
+    }
+
+    if (timeToFirstDeltaMs == null) {
+      timeToFirstDeltaMs = Date.now() - streamStartMs;
+    }
+    streamedChars += event.delta.length;
+    onDelta?.(event.delta);
+  }
+
+  const response = await stream.finalResponse();
+  return {
+    response,
+    streamedChars,
+    timeToFirstDeltaMs,
+  };
+}
+
+async function createStreamedResponseWithCompatibilityFallback(
+  requestBase: Record<string, unknown>,
+  setup: ToolSetup,
+  vectorStoreIds: string[] | undefined,
+  domainConfig: DomainConfig,
+  onDelta?: (delta: string) => void,
+): Promise<StreamPassResult> {
+  try {
+    return await createStreamedResponseWithTools(requestBase, setup, supportsToolResources, onDelta);
+  } catch (error) {
+    if (supportsToolResources && setup.toolResources && isUnknownToolResourcesError(error)) {
+      console.warn('Responses API does not accept tool_resources. Falling back to legacy vector store attachment.');
+      supportsToolResources = false;
+      useLegacyToolVectorStoreAttachment = true;
+
+      const legacySetup = buildTools(vectorStoreIds, domainConfig);
+      return createStreamedResponseWithTools(requestBase, legacySetup, supportsToolResources, onDelta);
+    }
+    throw error;
+  }
+}
+
 function hasFileSearchTool(setup: ToolSetup): boolean {
   return setup.tools.some((tool) => tool.type === 'file_search');
 }
@@ -693,6 +789,265 @@ export async function ask(params: AskParams): Promise<AskResult> {
     answer: finalAnswer,
     response,
     metrics,
+  };
+}
+
+export async function askStream(params: AskStreamParams): Promise<AskStreamResult> {
+  const askStartMs = Date.now();
+  const message = params.message.trim();
+  const hasImages = Array.isArray(params.images) && params.images.length > 0;
+  if (!message && !hasImages) {
+    throw new Error('Message or images must be provided');
+  }
+
+  const metrics: AskMetrics = {
+    imageAnalysisMs: 0,
+    initialResponseMs: 0,
+    retries: [],
+    totalMs: 0,
+  };
+
+  const streamMetrics: AskStreamMetrics = {
+    draftRevisionCount: 0,
+    streamedCharsPass1: 0,
+    streamedCharsPass2: 0,
+  };
+
+  const topic = params.topicHint ?? inferTopicHint(message);
+  const agentProfile = params.agentProfile ?? 'admin';
+  const domainConfig = buildDomainConfig(topic);
+  const model = params.model ?? settings.model;
+  const toolSetup = buildTools(params.vectorStoreIds, domainConfig);
+  const systemPrompt = buildSystemPrompt(domainConfig, agentProfile);
+
+  const imageAnalysisStartMs = Date.now();
+  const imageInsights = hasImages ? await extractImageInsights(params.images ?? [], topic) : [];
+  metrics.imageAnalysisMs = Date.now() - imageAnalysisStartMs;
+  const historyTranscript = params.previousResponseId ? null : formatHistory(params.history ?? []);
+  const userText = message.length > 0 ? message : 'Please review the attached image(s) and provide your findings.';
+
+  const userContent: ResponseInputMessageContentList = [
+    {
+      type: 'input_text',
+      text: buildUserMessage(userText, domainConfig, historyTranscript, params.images, imageInsights),
+    },
+  ];
+
+  for (const image of params.images ?? []) {
+    userContent.push({
+      type: 'input_image',
+      detail: 'high',
+      image_url: `data:${image.mimeType};base64,${image.data}`,
+    });
+  }
+
+  const buildRequestBase = (
+    content: ResponseInputMessageContentList,
+    metadataExtras?: Record<string, string>,
+  ) =>
+    ({
+      model,
+      max_output_tokens: MAX_OUTPUT_TOKENS,
+      include: ['web_search_call.action.sources', 'file_search_call.results'],
+      input: [
+        {
+          role: 'system',
+          content: [
+            {
+              type: 'input_text',
+              text: systemPrompt,
+            },
+          ],
+        },
+        {
+          role: 'user',
+          content,
+        },
+      ],
+      metadata: {
+        topic_hint: topic,
+        primary_domain: domainConfig.preferredDomains[0],
+        agent_profile: agentProfile,
+        ...(metadataExtras ?? {}),
+      },
+      ...(agentProfile === 'csr' ? { temperature: 0.2 } : {}),
+      ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
+      ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
+    }) as const;
+
+  const requestBase = buildRequestBase(userContent);
+  let activeDraftId = 'draft_1';
+
+  const initialResponseStartMs = Date.now();
+  params.onProgress?.({ stage: 'initial_response_start' });
+  let initialPass = await createStreamedResponseWithCompatibilityFallback(
+    requestBase,
+    toolSetup,
+    params.vectorStoreIds,
+    domainConfig,
+    (delta) => {
+      if (streamMetrics.timeToFirstDeltaMs == null) {
+        streamMetrics.timeToFirstDeltaMs = Date.now() - askStartMs;
+      }
+      params.onDraftDelta?.({ draftId: activeDraftId, text: delta });
+    },
+  );
+  metrics.initialResponseMs = Date.now() - initialResponseStartMs;
+  streamMetrics.streamedCharsPass1 = initialPass.streamedChars;
+  params.onProgress?.({ stage: 'initial_response_complete' });
+
+  let response = initialPass.response;
+  let answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
+  let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, agentProfile, response, params.images, imageInsights);
+  if (!hasSourcesSection(answerWithSources)) {
+    console.warn('Model response missing Sources section.');
+  }
+
+  if (agentProfile === 'admin' && isSourceFallbackAnswer(finalAnswer) && hasFileSearchTool(toolSetup)) {
+    const retryMetric: AskRetryMetric = {
+      reason: 'admin_source_fallback',
+      attempted: false,
+      succeeded: false,
+    };
+    metrics.retries.push(retryMetric);
+    const retryContent = buildRetryUserContent(userContent);
+    const retryRequestBase = buildRequestBase(retryContent, { retry_after_source_fallback: '1' });
+    const retryStartMs = Date.now();
+    params.onProgress?.({ stage: 'admin_retry_start' });
+
+    try {
+      retryMetric.attempted = true;
+      const retrySetup = buildTools(params.vectorStoreIds, domainConfig);
+      const nextDraftId = 'draft_2';
+      streamMetrics.draftRevisionCount += 1;
+      params.onDraftRevision?.({ fromDraftId: activeDraftId, toDraftId: nextDraftId, reason: 'source_retry' });
+      activeDraftId = nextDraftId;
+
+      const retryPass = await createStreamedResponseWithCompatibilityFallback(
+        retryRequestBase,
+        retrySetup,
+        params.vectorStoreIds,
+        domainConfig,
+        (delta) => {
+          if (streamMetrics.timeToFirstDeltaMs == null) {
+            streamMetrics.timeToFirstDeltaMs = Date.now() - askStartMs;
+          }
+          params.onDraftDelta?.({ draftId: activeDraftId, text: delta });
+        },
+      );
+      streamMetrics.streamedCharsPass2 = retryPass.streamedChars;
+
+      const retryResponse = retryPass.response;
+      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retryFinalAnswer = enforceSourceAllowlist(
+        retryAnswerWithSources,
+        domainConfig,
+        agentProfile,
+        retryResponse,
+        params.images,
+        imageInsights,
+      );
+
+      if (!hasSourcesSection(retryAnswerWithSources)) {
+        console.warn('Model retry response missing Sources section.');
+      }
+
+      response = retryResponse;
+      answerWithSources = retryAnswerWithSources;
+      finalAnswer = retryFinalAnswer;
+      retryMetric.succeeded = true;
+      retryMetric.durationMs = Date.now() - retryStartMs;
+      params.onProgress?.({ stage: 'admin_retry_complete' });
+    } catch (error) {
+      retryMetric.durationMs = Date.now() - retryStartMs;
+      console.warn('Retry after source fallback failed:', error);
+      params.onProgress?.({ stage: 'admin_retry_complete' });
+    }
+  }
+
+  if (agentProfile === 'csr' && isSourceFallbackAnswer(finalAnswer)) {
+    const retryMetric: AskRetryMetric = {
+      reason: 'csr_source_fallback',
+      attempted: false,
+      succeeded: false,
+    };
+    metrics.retries.push(retryMetric);
+    const retryContent = buildCsrRetryUserContent(userContent);
+    const retryRequestBase = buildRequestBase(retryContent, { retry_after_csr_us_fallback: '1' });
+    const retryStartMs = Date.now();
+    params.onProgress?.({ stage: 'csr_retry_start' });
+
+    try {
+      retryMetric.attempted = true;
+      const retrySetup = buildTools(params.vectorStoreIds, domainConfig);
+      const nextDraftId = activeDraftId === 'draft_1' ? 'draft_2' : 'draft_3';
+      streamMetrics.draftRevisionCount += 1;
+      params.onDraftRevision?.({ fromDraftId: activeDraftId, toDraftId: nextDraftId, reason: 'source_retry' });
+      activeDraftId = nextDraftId;
+
+      const retryPass = await createStreamedResponseWithCompatibilityFallback(
+        retryRequestBase,
+        retrySetup,
+        params.vectorStoreIds,
+        domainConfig,
+        (delta) => {
+          if (streamMetrics.timeToFirstDeltaMs == null) {
+            streamMetrics.timeToFirstDeltaMs = Date.now() - askStartMs;
+          }
+          params.onDraftDelta?.({ draftId: activeDraftId, text: delta });
+        },
+      );
+      streamMetrics.streamedCharsPass2 = retryPass.streamedChars;
+
+      const retryResponse = retryPass.response;
+      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retryFinalAnswer = enforceSourceAllowlist(
+        retryAnswerWithSources,
+        domainConfig,
+        agentProfile,
+        retryResponse,
+        params.images,
+        imageInsights,
+      );
+
+      if (!hasSourcesSection(retryAnswerWithSources)) {
+        console.warn('Model CSR retry response missing Sources section.');
+      }
+
+      response = retryResponse;
+      answerWithSources = retryAnswerWithSources;
+      finalAnswer = retryFinalAnswer;
+      retryMetric.succeeded = true;
+      retryMetric.durationMs = Date.now() - retryStartMs;
+      params.onProgress?.({ stage: 'csr_retry_complete' });
+    } catch (error) {
+      retryMetric.durationMs = Date.now() - retryStartMs;
+      console.warn('CSR retry after US source fallback failed:', error);
+      params.onProgress?.({ stage: 'csr_retry_complete' });
+    }
+  }
+
+  if (
+    isSourceFallbackAnswer(finalAnswer) &&
+    finalAnswer.trim() !== answerWithSources.trim() &&
+    (streamMetrics.streamedCharsPass1 > 0 || streamMetrics.streamedCharsPass2 > 0)
+  ) {
+    streamMetrics.draftRevisionCount += 1;
+    params.onDraftRevision?.({
+      fromDraftId: activeDraftId,
+      toDraftId: 'draft_final',
+      reason: 'allowlist_replace',
+    });
+  }
+
+  metrics.totalMs = Date.now() - askStartMs;
+  params.onProgress?.({ stage: 'done' });
+
+  return {
+    answer: finalAnswer,
+    response,
+    metrics,
+    streamMetrics,
   };
 }
 

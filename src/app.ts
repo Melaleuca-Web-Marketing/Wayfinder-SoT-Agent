@@ -8,6 +8,7 @@ import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   ask,
+  askStream,
   type AgentProfile,
   type AskImage,
   type AskProgressEvent,
@@ -81,6 +82,9 @@ type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
 const ALLOWED_ADMIN_MODEL_PRESETS = new Set<AdminModelPreset>(['gpt-4.1', 'gpt-5.1-none', 'gpt-5.1-low']);
 const ADMIN_MODEL_PRESET_GPT_4_1 = process.env.ADMIN_MODEL_PRESET_GPT_4_1 ?? 'gpt-4.1';
 const ADMIN_MODEL_PRESET_GPT_5_1 = process.env.ADMIN_MODEL_PRESET_GPT_5_1 ?? 'gpt-5.1';
+const ENABLE_CHAT_TOKEN_STREAMING = process.env.ENABLE_CHAT_TOKEN_STREAMING === 'true';
+const ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY = process.env.ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY === 'true';
+const ENABLE_CHAT_TOKEN_STREAMING_CSR = process.env.ENABLE_CHAT_TOKEN_STREAMING_CSR !== 'false';
 const chatPerfAggregate = {
   totalRequests: 0,
   retryTriggeredRequests: 0,
@@ -573,6 +577,241 @@ export function createApp(): express.Express {
     }
   });
 
+  app.post('/api/chat/stream', async (req, res) => {
+    const requestStartMs = Date.now();
+    let moderationMs = 0;
+    let vectorStoreMs = 0;
+    let askMs = 0;
+    const {
+      message: rawMessage,
+      topicHint,
+      history,
+      images: rawImages,
+      previousResponseId,
+      agentProfile,
+      adminModelPreset: rawAdminModelPreset,
+    } = req.body ?? {};
+
+    if (rawMessage != null && typeof rawMessage !== 'string') {
+      res.status(400).json({ error: 'message must be a string' });
+      return;
+    }
+
+    if (previousResponseId != null && typeof previousResponseId !== 'string') {
+      res.status(400).json({ error: 'previousResponseId must be a string' });
+      return;
+    }
+
+    if (agentProfile != null && typeof agentProfile !== 'string') {
+      res.status(400).json({ error: 'agentProfile must be a string' });
+      return;
+    }
+
+    if (rawAdminModelPreset != null && typeof rawAdminModelPreset !== 'string') {
+      res.status(400).json({ error: 'adminModelPreset must be a string' });
+      return;
+    }
+
+    const resolvedAgentProfile = (agentProfile?.trim().toLowerCase() || 'admin') as AgentProfile;
+    if (!ALLOWED_AGENT_PROFILES.has(resolvedAgentProfile)) {
+      res.status(400).json({ error: 'agentProfile must be one of: admin, csr' });
+      return;
+    }
+
+    if (!isTokenStreamingEnabled(resolvedAgentProfile)) {
+      res.status(404).json({ error: 'Token streaming endpoint is disabled.' });
+      return;
+    }
+
+    const adminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
+    if (adminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(adminModelPreset)) {
+      res.status(400).json({ error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low' });
+      return;
+    }
+
+    const adminModelOverride =
+      resolvedAgentProfile === 'admin' && adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
+
+    const message = typeof rawMessage === 'string' ? rawMessage : '';
+
+    let images: AskImage[];
+    try {
+      images = normalizeIncomingImages(rawImages);
+    } catch (error) {
+      res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid images payload.' });
+      return;
+    }
+
+    if (!message.trim() && images.length === 0) {
+      res.status(400).json({ error: 'Provide a message or at least one image.' });
+      return;
+    }
+
+    if (message.length > MAX_MESSAGE_CHARS) {
+      res.status(400).json({ error: `Message too long. Limit is ${MAX_MESSAGE_CHARS} characters.` });
+      return;
+    }
+
+    if (countUrls(message) > MAX_MESSAGE_URLS) {
+      res.status(400).json({ error: `Too many URLs provided. Limit is ${MAX_MESSAGE_URLS}.` });
+      return;
+    }
+
+    res.status(200);
+    res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+    }
+
+    if (OUT_OF_SCOPE_PATTERN.test(message)) {
+      writeProgressStatus(res, 'finalizing', 'Out-of-scope request detected.');
+      writeProgressEvent(res, {
+        type: 'result',
+        payload: {
+          answer: FALLBACK_MESSAGE,
+          response: null,
+        },
+      });
+      writeProgressEvent(res, { type: 'done' });
+      res.end();
+      return;
+    }
+
+    try {
+      writeProgressStatus(res, 'moderating', 'Running safety checks...');
+      const moderationStartMs = Date.now();
+      const moderation = await vectorStoreClient.moderations.create({
+        model: 'omni-moderation-latest',
+        input: message,
+      });
+      moderationMs = Date.now() - moderationStartMs;
+
+      const flagged =
+        moderation.results?.some((result: { flagged?: boolean }) => result.flagged === true) ?? false;
+      if (flagged) {
+        writeProgressStatus(res, 'finalizing', 'Request blocked by moderation policy.');
+        writeProgressEvent(res, {
+          type: 'result',
+          payload: {
+            answer: "I'm sorry, but I can’t help with that request.",
+            response: null,
+          },
+        });
+        writeProgressEvent(res, { type: 'done' });
+        res.end();
+        return;
+      }
+
+      writeProgressStatus(res, 'retrieving', 'Preparing retrieval context...');
+      const vectorStoreStartMs = Date.now();
+      const vectorStoreId = await ensureVectorStoreId();
+      vectorStoreMs = Date.now() - vectorStoreStartMs;
+      writeProgressStatus(res, 'drafting', 'Generating response...');
+
+      const askStartMs = Date.now();
+      const result = await askStream({
+        message,
+        topicHint,
+        model: adminModelOverride?.model,
+        reasoningEffort: adminModelOverride?.reasoningEffort,
+        history: sanitizeHistory(history),
+        images,
+        vectorStoreIds: [vectorStoreId],
+        previousResponseId: previousResponseId?.trim() || undefined,
+        agentProfile: resolvedAgentProfile,
+        onProgress: (event) => {
+          const mapped = mapAskProgressToStreamStatus(event);
+          if (mapped) {
+            writeProgressStatus(res, mapped.stage, mapped.message);
+          }
+        },
+        onDraftDelta: (event) => {
+          writeProgressEvent(res, {
+            type: 'delta',
+            draftId: event.draftId,
+            text: event.text,
+          });
+        },
+        onDraftRevision: (event) => {
+          const revisionMessage =
+            event.reason === 'source_retry' ?
+              'Re-checking sources and revising answer...'
+            : 'Applying source-safe fallback...';
+          writeProgressStatus(res, 'verifying', revisionMessage);
+          writeProgressEvent(res, {
+            type: 'revision',
+            fromDraftId: event.fromDraftId,
+            toDraftId: event.toDraftId,
+            reason: event.reason,
+          });
+        },
+      });
+      askMs = Date.now() - askStartMs;
+      const retrySummary = summarizeRetryMetrics(result.metrics.retries);
+      const aggregateSnapshot = updateChatPerfAggregate(retrySummary);
+      const totalMs = Date.now() - requestStartMs;
+      const metrics = {
+        totalMs,
+        moderationMs,
+        vectorStoreMs,
+        askMs,
+        ask: result.metrics,
+        stream: result.streamMetrics,
+        retries: retrySummary,
+        aggregate: aggregateSnapshot,
+      };
+
+      console.info(
+        '[chat_perf]',
+        JSON.stringify({
+          status: 'ok',
+          mode: 'token_stream',
+          agentProfile: resolvedAgentProfile,
+          topicHint: topicHint ?? null,
+          ...metrics,
+        }),
+      );
+
+      writeProgressStatus(res, 'finalizing', 'Finalizing response...');
+      writeProgressEvent(res, {
+        type: 'result',
+        payload: {
+          answer: result.answer,
+          response: result.response,
+          responseId: result.response?.id,
+          metrics,
+        },
+      });
+      writeProgressEvent(res, { type: 'done' });
+      res.end();
+    } catch (error) {
+      const totalMs = Date.now() - requestStartMs;
+      console.error(
+        '[chat_perf]',
+        JSON.stringify({
+          status: 'error',
+          mode: 'token_stream',
+          agentProfile: resolvedAgentProfile,
+          topicHint: topicHint ?? null,
+          totalMs,
+          moderationMs,
+          vectorStoreMs,
+          askMs,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        }),
+      );
+      writeProgressEvent(res, {
+        type: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      writeProgressEvent(res, { type: 'done' });
+      res.end();
+    }
+  });
+
   app.post('/api/chat', async (req, res) => {
     const requestStartMs = Date.now();
     let moderationMs = 0;
@@ -983,6 +1222,22 @@ function updateChatPerfAggregate(retrySummary: { triggered: boolean; attemptedCo
   };
 }
 
+function isTokenStreamingEnabled(agentProfile: AgentProfile): boolean {
+  if (!ENABLE_CHAT_TOKEN_STREAMING) {
+    return false;
+  }
+
+  if (ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY && agentProfile !== 'admin') {
+    return false;
+  }
+
+  if (agentProfile === 'csr' && !ENABLE_CHAT_TOKEN_STREAMING_CSR) {
+    return false;
+  }
+
+  return true;
+}
+
 function mapAskProgressToStreamStatus(
   event: AskProgressEvent,
 ): { stage: ChatProgressStage; message: string } | null {
@@ -1012,6 +1267,8 @@ function writeProgressEvent(
   res: express.Response,
   payload:
     | { type: 'status'; stage: ChatProgressStage; message: string }
+    | { type: 'delta'; draftId: string; text: string }
+    | { type: 'revision'; fromDraftId: string; toDraftId: string; reason: 'source_retry' | 'allowlist_replace' }
     | { type: 'result'; payload: unknown }
     | { type: 'error'; error: string }
     | { type: 'done' },
