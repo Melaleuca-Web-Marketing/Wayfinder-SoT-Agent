@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, ClipboardEvent, FormEvent } from 'react';
 import {
+  sendChatRequestWithTokenStream,
   sendChatRequestWithProgress,
   fetchRealtimeToken,
   type ChatRequestBody,
   type ChatProgressEvent,
   type ChatResponseBody,
+  type ChatTokenStreamEvent,
 } from '../../../shared/agentClient';
 
 type Role = 'user' | 'assistant';
@@ -36,6 +38,7 @@ interface AttachmentDraft {
 
 type VoiceStatus = 'idle' | 'connecting' | 'active';
 type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
+type ResponseMode = 'not-tested' | 'token-stream' | 'progress-fallback';
 
 const MAX_ATTACHMENTS = 3;
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024; // 4MB
@@ -120,9 +123,19 @@ const mapBackendModelToAdminPreset = (model: string | undefined): AdminModelPres
   return null;
 };
 
+const shouldFallbackToProgress = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const normalized = error.message.toLowerCase();
+  return normalized.includes('token streaming endpoint is disabled') || normalized.includes('status 404');
+};
+
 export function ChatPanel() {
   const [topicHint, setTopicHint] = useState<'melaleuca' | 'riverbend'>('melaleuca');
   const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-4.1');
+  const [responseMode, setResponseMode] = useState<ResponseMode>('not-tested');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [loading, setLoading] = useState(false);
@@ -369,13 +382,59 @@ export function ChatPanel() {
         images: userImages.length > 0 ? userImages : undefined,
       };
 
-      const nextMessages = [...messages, userMessage];
-      setMessages(nextMessages);
+      setMessages((prev) => [...prev, userMessage]);
       setAttachments([]);
       setLoading(true);
       setChatProgressMessage('Running safety checks...');
 
       try {
+        const draftMessageId = makeId();
+        let activeDraftId: string | null = null;
+
+        const replaceDraft = (content: string, streaming: boolean) => {
+          setMessages((prev) => {
+            let found = false;
+            const next = prev.map((turn) => {
+              if (turn.id !== draftMessageId) {
+                return turn;
+              }
+              found = true;
+              return { ...turn, content, streaming };
+            });
+
+            if (!found) {
+              next.push({ id: draftMessageId, role: 'assistant', content, streaming });
+            }
+            return next;
+          });
+        };
+
+        const appendDraft = (delta: string) => {
+          if (!delta) {
+            return;
+          }
+
+          setMessages((prev) => {
+            let found = false;
+            const next = prev.map((turn) => {
+              if (turn.id !== draftMessageId) {
+                return turn;
+              }
+              found = true;
+              return {
+                ...turn,
+                content: turn.content + delta,
+                streaming: true,
+              };
+            });
+
+            if (!found) {
+              next.push({ id: draftMessageId, role: 'assistant', content: delta, streaming: true });
+            }
+            return next;
+          });
+        };
+
         const requestBody: ChatRequestBody = {
           message: trimmed,
           topicHint,
@@ -385,14 +444,72 @@ export function ChatPanel() {
           adminModelPreset,
           ...(previousResponseId ? { previousResponseId } : {}),
         };
-        const data: ChatResponseBody = await sendChatRequestWithProgress(requestBody, (event: ChatProgressEvent) => {
-          if (event.type === 'status') {
-            setChatProgressMessage(event.message);
-          } else if (event.type === 'result') {
-            setChatProgressMessage('Finalizing response...');
+        let usedTokenStream = true;
+        let data: ChatResponseBody;
+
+        try {
+          data = await sendChatRequestWithTokenStream(requestBody, (event: ChatTokenStreamEvent) => {
+            switch (event.type) {
+              case 'status':
+                setChatProgressMessage(event.message);
+                break;
+              case 'delta':
+                if (activeDraftId && event.draftId !== activeDraftId) {
+                  activeDraftId = event.draftId;
+                  replaceDraft(event.text, true);
+                  break;
+                }
+                activeDraftId = event.draftId;
+                appendDraft(event.text);
+                setChatProgressMessage('Drafting response...');
+                break;
+              case 'revision':
+                activeDraftId = event.toDraftId;
+                replaceDraft('', true);
+                setChatProgressMessage(
+                  event.reason === 'source_retry' ?
+                    'Re-checking sources and revising answer...'
+                  : 'Applying source-safe fallback...',
+                );
+                break;
+              case 'result':
+                replaceDraft(event.payload.answer, false);
+                setChatProgressMessage('Finalizing response...');
+                break;
+              case 'error':
+                setChatProgressMessage('Streaming failed. Retrying…');
+                break;
+              case 'done':
+                break;
+            }
+          });
+          setResponseMode('token-stream');
+        } catch (streamError) {
+          if (!shouldFallbackToProgress(streamError)) {
+            throw streamError;
           }
-        });
-        setMessages([...nextMessages, { id: makeId(), role: 'assistant', content: data.answer }]);
+
+          usedTokenStream = false;
+          setResponseMode('progress-fallback');
+          setMessages((prev) => prev.filter((turn) => turn.id !== draftMessageId));
+          data = await sendChatRequestWithProgress(requestBody, (event: ChatProgressEvent) => {
+            if (event.type === 'status') {
+              setChatProgressMessage(event.message);
+            } else if (event.type === 'result') {
+              setChatProgressMessage('Finalizing response...');
+            }
+          });
+        }
+
+        if (usedTokenStream) {
+          replaceDraft(data.answer, false);
+        } else {
+          setMessages((prev) => [
+            ...prev.filter((turn) => turn.id !== draftMessageId),
+            { id: makeId(), role: 'assistant', content: data.answer },
+          ]);
+        }
+
         const responseId =
           data.responseId ??
           (data.response && typeof data.response === 'object' && 'id' in data.response ?
@@ -551,6 +668,20 @@ export function ChatPanel() {
 
   const remainingAttachmentSlots = Math.max(0, MAX_ATTACHMENTS - attachments.length);
   const canSubmit = input.trim().length > 0 || attachments.length > 0;
+  const hasStreamingAssistantDraft = useMemo(
+    () => messages.some((turn) => turn.role === 'assistant' && turn.streaming),
+    [messages],
+  );
+  const responseModeMeta = useMemo(() => {
+    switch (responseMode) {
+      case 'token-stream':
+        return { label: 'Token stream', className: 'token' };
+      case 'progress-fallback':
+        return { label: 'Progress fallback', className: 'fallback' };
+      default:
+        return { label: 'Not tested', className: 'neutral' };
+    }
+  }, [responseMode]);
 
   const handleVoiceToggle = useCallback(() => {
     if (isVoiceActive || isVoiceConnecting) {
@@ -577,6 +708,7 @@ export function ChatPanel() {
     setPreviousResponseId(null);
     setMessages([]);
     setAttachments([]);
+    setResponseMode('not-tested');
     setError(null);
   }, []);
 
@@ -587,6 +719,7 @@ export function ChatPanel() {
     setPreviousResponseId(null);
     setMessages([]);
     setAttachments([]);
+    setResponseMode('not-tested');
     setError(null);
   }, []);
 
@@ -616,6 +749,10 @@ export function ChatPanel() {
               <option value="gpt-5.1-low">gpt-5.1-low</option>
             </select>
           </label>
+          <div className={`chat-mode-badge ${responseModeMeta.className}`} title="Runtime response delivery mode for the latest request.">
+            <span className="label">Response mode</span>
+            <span className="value">{responseModeMeta.label}</span>
+          </div>
           <button
             type="button"
             className={isVoiceActive || isVoiceConnecting ? 'danger' : 'secondary'}
@@ -631,6 +768,7 @@ export function ChatPanel() {
               setMessages([]);
               setAttachments([]);
               setPreviousResponseId(null);
+              setResponseMode('not-tested');
             }}
             disabled={loading}
           >
@@ -684,7 +822,7 @@ export function ChatPanel() {
             </div>
           );
         })}
-        {loading && (
+        {loading && !hasStreamingAssistantDraft && (
           <div className="chat-turn assistant">
             <div className="chat-role">Assistant</div>
             <div className="chat-content">{chatProgressMessage ?? 'Thinking…'}</div>

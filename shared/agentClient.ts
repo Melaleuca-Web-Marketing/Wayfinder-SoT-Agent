@@ -43,6 +43,12 @@ export interface ChatResponseBody {
       }>;
       totalMs?: number;
     };
+    stream?: {
+      timeToFirstDeltaMs?: number;
+      draftRevisionCount?: number;
+      streamedCharsPass1?: number;
+      streamedCharsPass2?: number;
+    };
     retries?: {
       triggered?: boolean;
       attemptedCount?: number;
@@ -66,6 +72,17 @@ export type ChatProgressEvent =
   | { type: 'result'; payload: ChatResponseBody; timestamp: string }
   | { type: 'error'; error: string; timestamp: string }
   | { type: 'done'; timestamp: string };
+
+export type ChatTokenStreamEvent =
+  | ChatProgressEvent
+  | { type: 'delta'; draftId: string; text: string; timestamp: string }
+  | {
+      type: 'revision';
+      fromDraftId: string;
+      toDraftId: string;
+      reason: 'source_retry' | 'allowlist_replace';
+      timestamp: string;
+    };
 
 const DEFAULT_HEADERS = {
   'Content-Type': 'application/json',
@@ -92,26 +109,19 @@ export async function fetchRealtimeToken(): Promise<Response> {
   return fetch('/api/realtime/token', { method: 'POST' });
 }
 
-export async function sendChatRequestWithProgress(
-  body: ChatRequestBody,
-  onEvent: (event: ChatProgressEvent) => void,
-  abortSignal?: AbortSignal,
+async function buildError(response: Response, fallback: string): Promise<Error> {
+  const payload = await response.json().catch(() => ({}));
+  const errorMessage = typeof payload.error === 'string' ? payload.error : fallback;
+  return new Error(`${errorMessage} (status ${response.status})`);
+}
+
+async function readNdjsonChatResponse<EventType extends { type: string; timestamp?: string }>(
+  response: Response,
+  streamName: string,
+  onEvent: (event: EventType) => void,
 ): Promise<ChatResponseBody> {
-  const response = await fetch('/api/chat/progress', {
-    method: 'POST',
-    headers: DEFAULT_HEADERS,
-    body: JSON.stringify(body),
-    signal: abortSignal,
-  });
-
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}));
-    const errorMessage = typeof payload.error === 'string' ? payload.error : 'Chat progress request failed';
-    throw new Error(errorMessage);
-  }
-
   if (!response.body) {
-    throw new Error('Chat progress stream was empty.');
+    throw new Error(`${streamName} stream was empty.`);
   }
 
   const reader = response.body.getReader();
@@ -131,21 +141,22 @@ export async function sendChatRequestWithProgress(
         continue;
       }
 
-      let event: ChatProgressEvent;
+      let event: EventType;
       try {
-        event = JSON.parse(trimmed) as ChatProgressEvent;
+        event = JSON.parse(trimmed) as EventType;
       } catch {
         continue;
       }
 
       onEvent(event);
 
-      if (event.type === 'result') {
-        finalResult = event.payload;
+      if (event.type === 'result' && 'payload' in event) {
+        finalResult = (event as EventType & { payload: ChatResponseBody }).payload;
       }
 
-      if (event.type === 'error') {
-        throw new Error(event.error || 'Chat progress request failed');
+      if (event.type === 'error' && 'error' in event) {
+        const eventError = (event as EventType & { error?: string }).error ?? `${streamName} request failed`;
+        throw new Error(eventError);
       }
     }
 
@@ -155,8 +166,46 @@ export async function sendChatRequestWithProgress(
   }
 
   if (!finalResult) {
-    throw new Error('Chat progress stream completed without a result.');
+    throw new Error(`${streamName} stream completed without a result.`);
   }
 
   return finalResult;
+}
+
+export async function sendChatRequestWithProgress(
+  body: ChatRequestBody,
+  onEvent: (event: ChatProgressEvent) => void,
+  abortSignal?: AbortSignal,
+): Promise<ChatResponseBody> {
+  const response = await fetch('/api/chat/progress', {
+    method: 'POST',
+    headers: DEFAULT_HEADERS,
+    body: JSON.stringify(body),
+    signal: abortSignal,
+  });
+
+  if (!response.ok) {
+    throw await buildError(response, 'Chat progress request failed');
+  }
+
+  return readNdjsonChatResponse(response, 'Chat progress', onEvent);
+}
+
+export async function sendChatRequestWithTokenStream(
+  body: ChatRequestBody,
+  onEvent: (event: ChatTokenStreamEvent) => void,
+  abortSignal?: AbortSignal,
+): Promise<ChatResponseBody> {
+  const response = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: DEFAULT_HEADERS,
+    body: JSON.stringify(body),
+    signal: abortSignal,
+  });
+
+  if (!response.ok) {
+    throw await buildError(response, 'Chat token stream request failed');
+  }
+
+  return readNdjsonChatResponse(response, 'Chat token stream', onEvent);
 }
