@@ -437,8 +437,7 @@ export function createApp(): express.Express {
       return;
     }
 
-    const adminModelOverride =
-      resolvedAgentProfile === 'admin' && adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
+    const modelPresetOverride = adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
 
     const message = typeof rawMessage === 'string' ? rawMessage : '';
 
@@ -523,8 +522,8 @@ export function createApp(): express.Express {
       const result = await ask({
         message,
         topicHint,
-        model: adminModelOverride?.model,
-        reasoningEffort: adminModelOverride?.reasoningEffort,
+        model: modelPresetOverride?.model,
+        reasoningEffort: modelPresetOverride?.reasoningEffort,
         history: sanitizeHistory(history),
         images,
         vectorStoreIds: [vectorStoreId],
@@ -651,8 +650,7 @@ export function createApp(): express.Express {
       return;
     }
 
-    const adminModelOverride =
-      resolvedAgentProfile === 'admin' && adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
+    const modelPresetOverride = adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
 
     const message = typeof rawMessage === 'string' ? rawMessage : '';
 
@@ -737,8 +735,8 @@ export function createApp(): express.Express {
       const result = await askStream({
         message,
         topicHint,
-        model: adminModelOverride?.model,
-        reasoningEffort: adminModelOverride?.reasoningEffort,
+        model: modelPresetOverride?.model,
+        reasoningEffort: modelPresetOverride?.reasoningEffort,
         history: sanitizeHistory(history),
         images,
         vectorStoreIds: [vectorStoreId],
@@ -881,8 +879,7 @@ export function createApp(): express.Express {
       return;
     }
 
-    const adminModelOverride =
-      resolvedAgentProfile === 'admin' && adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
+    const modelPresetOverride = adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
 
     const message = typeof rawMessage === 'string' ? rawMessage : '';
 
@@ -939,8 +936,8 @@ export function createApp(): express.Express {
       const result = await ask({
         message,
         topicHint,
-        model: adminModelOverride?.model,
-        reasoningEffort: adminModelOverride?.reasoningEffort,
+        model: modelPresetOverride?.model,
+        reasoningEffort: modelPresetOverride?.reasoningEffort,
         history: sanitizeHistory(history),
         images,
         vectorStoreIds: [vectorStoreId],
