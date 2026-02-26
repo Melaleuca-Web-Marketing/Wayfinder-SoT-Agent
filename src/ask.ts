@@ -188,7 +188,7 @@ function toAllowedDomains(domains: string[]): string[] {
 
     try {
       const url = new URL(ensureHttps(trimmed));
-      const host = url.hostname.replace(/^www\./, '');
+      const host = url.hostname.toLowerCase();
       if (host) {
         allowed.add(host);
       }
@@ -197,13 +197,46 @@ function toAllowedDomains(domains: string[]): string[] {
       // Fall back to a conservative parse if it's not a valid URL.
     }
 
-    const normalized = stripScheme(trimmed).split('/')[0].trim();
+    const normalized = trimmed
+      .replace(/^https?:\/\//, '')
+      .split('/')[0]
+      .trim()
+      .toLowerCase();
     if (normalized) {
       allowed.add(normalized);
     }
   }
 
   return Array.from(allowed.values());
+}
+
+function tightenMelaleucaSearchHosts(domains: string[]): string[] {
+  if (domains.length === 0) {
+    return domains;
+  }
+
+  const normalized = new Set(
+    domains
+      .map((domain) => domain.trim().toLowerCase())
+      .filter((domain) => domain.length > 0),
+  );
+
+  const hasBroadMelaleucaDomain =
+    normalized.has('melaleuca.com') ||
+    normalized.has('*.melaleuca.com') ||
+    normalized.has('.melaleuca.com');
+
+  if (!hasBroadMelaleucaDomain) {
+    return Array.from(normalized.values());
+  }
+
+  normalized.delete('melaleuca.com');
+  normalized.delete('*.melaleuca.com');
+  normalized.delete('.melaleuca.com');
+  normalized.add('www.melaleuca.com');
+  normalized.add('cdnsc1.melaleuca.com');
+
+  return Array.from(normalized.values());
 }
 
 function buildUserLocation():
@@ -354,10 +387,11 @@ let supportsToolResources = true;
 let useLegacyToolVectorStoreAttachment = false;
 
 function buildTools(vectorStoreIds: string[] | undefined, domainConfig: DomainConfig): ToolSetup {
-  const allowedDomains =
+  const configuredDomains =
     settings.webSearchAllowedDomains && settings.webSearchAllowedDomains.length > 0 ?
       settings.webSearchAllowedDomains
     : toAllowedDomains(domainConfig.preferredDomains);
+  const allowedDomains = tightenMelaleucaSearchHosts(configuredDomains);
   const userLocation = buildUserLocation();
   const tools: ToolDefinition[] = [
     {
