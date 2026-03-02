@@ -73,7 +73,7 @@ const riverbendDomain = process.env.RIVERBEND_DOMAIN ?? 'melaleuca.com/riverbend
 const vectorUrlAllowlist = parseDomainAllowlist(process.env.VECTOR_URL_ALLOWLIST, []);
 
 export const settings = {
-  model: process.env.OPENAI_MODEL ?? 'gpt-4.1',
+  model: process.env.OPENAI_MODEL ?? 'gpt-5.2',
   openAiRequestTimeoutMs: parseNonNegativeNumber(process.env.OPENAI_REQUEST_TIMEOUT_MS, 60000),
   openAiMaxRetries: parseNonNegativeNumber(process.env.OPENAI_MAX_RETRIES, 0),
   primaryDomain,

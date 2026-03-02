@@ -123,7 +123,7 @@ Tweak the `.env` knobs to adjust these guardrails as you scale.
 
 ## Voice Mode (Realtime API)
 
-- Text chat defaults to GPT-4.1 (`OPENAI_MODEL`, override as needed).
+- Text chat defaults to GPT-5.2 (`OPENAI_MODEL`, override as needed).
 - Click **Start voice** in the Chat panel to launch a WebRTC session with the OpenAI Realtime API (`REALTIME_MODEL`, default `gpt-4o-realtime-preview-2024-12-17`).
 - The browser captures microphone input, streams it to the model, and plays synthesized audio replies while streaming transcripts into the existing chat window (including Sources when returned).
 - Use **Stop voice** to end the session; transcripts remain in history alongside typed messages for easy follow-up.
