@@ -20,7 +20,7 @@ export interface ChatRequestBody {
   images?: ChatAttachmentInput[];
   previousResponseId?: string;
   agentProfile?: 'admin' | 'csr';
-  adminModelPreset?: 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
+  adminModelPreset?: 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low' | 'gpt-5.2-none' | 'gpt-5.2-low';
 }
 
 export interface ChatResponseBody {

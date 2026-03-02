@@ -37,7 +37,7 @@ interface AttachmentDraft {
 }
 
 type VoiceStatus = 'idle' | 'connecting' | 'active';
-type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low';
+type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low' | 'gpt-5.2-none' | 'gpt-5.2-low';
 type ResponseMode = 'not-tested' | 'token-stream' | 'progress-fallback';
 
 const MAX_ATTACHMENTS = 3;
@@ -120,6 +120,9 @@ const mapBackendModelToAdminPreset = (model: string | undefined): AdminModelPres
   if (normalized === 'gpt-5.1') {
     return 'gpt-5.1-none';
   }
+  if (normalized === 'gpt-5.2') {
+    return 'gpt-5.2-none';
+  }
   return null;
 };
 
@@ -134,7 +137,7 @@ const shouldFallbackToProgress = (error: unknown): boolean => {
 
 export function ChatPanel() {
   const [topicHint, setTopicHint] = useState<'melaleuca' | 'riverbend'>('melaleuca');
-  const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-4.1');
+  const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-5.2-none');
   const [responseMode, setResponseMode] = useState<ResponseMode>('not-tested');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatTurn[]>([]);
@@ -747,6 +750,8 @@ export function ChatPanel() {
               <option value="gpt-4.1">gpt-4.1</option>
               <option value="gpt-5.1-none">gpt-5.1-none</option>
               <option value="gpt-5.1-low">gpt-5.1-low</option>
+              <option value="gpt-5.2-none">gpt-5.2-none</option>
+              <option value="gpt-5.2-low">gpt-5.2-low</option>
             </select>
           </label>
           <div className={`chat-mode-badge ${responseModeMeta.className}`} title="Runtime response delivery mode for the latest request.">
