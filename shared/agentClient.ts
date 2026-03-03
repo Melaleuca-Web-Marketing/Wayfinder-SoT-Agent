@@ -27,6 +27,7 @@ export interface ChatResponseBody {
   answer: string;
   response?: unknown;
   responseId?: string;
+  traceId?: string;
   metrics?: {
     totalMs?: number;
     moderationMs?: number;
@@ -48,6 +49,16 @@ export interface ChatResponseBody {
       draftRevisionCount?: number;
       streamedCharsPass1?: number;
       streamedCharsPass2?: number;
+    };
+    retrieval?: {
+      webSearchCallCount?: number;
+      fileSearchCallCount?: number;
+      retryAttemptCount?: number;
+      retrySuccessCount?: number;
+    };
+    output?: {
+      answerChars?: number;
+      sourceCount?: number;
     };
     retries?: {
       triggered?: boolean;

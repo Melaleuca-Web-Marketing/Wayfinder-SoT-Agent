@@ -3,6 +3,7 @@ import cors from 'cors';
 import multer from 'multer';
 import { rateLimit } from 'express-rate-limit';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import fsSync from 'node:fs';
 import { promises as fs } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -407,6 +408,7 @@ export function createApp(): express.Express {
   });
 
   app.post('/api/chat/progress', async (req, res) => {
+    const traceId = createTraceId();
     const requestStartMs = Date.now();
     let moderationMs = 0;
     let vectorStoreMs = 0;
@@ -496,6 +498,7 @@ export function createApp(): express.Express {
       writeProgressEvent(res, {
         type: 'result',
         payload: {
+          traceId,
           answer: FALLBACK_MESSAGE,
           response: null,
         },
@@ -521,6 +524,7 @@ export function createApp(): express.Express {
         writeProgressEvent(res, {
           type: 'result',
           payload: {
+            traceId,
             answer: "I'm sorry, but I can’t help with that request.",
             response: null,
           },
@@ -558,21 +562,24 @@ export function createApp(): express.Express {
       const retrySummary = summarizeRetryMetrics(result.metrics.retries);
       const aggregateSnapshot = updateChatPerfAggregate(retrySummary);
       const totalMs = Date.now() - requestStartMs;
-      const metrics = {
+      const metrics = buildChatMetrics({
         totalMs,
         moderationMs,
         vectorStoreMs,
         askMs,
-        ask: result.metrics,
-        retries: retrySummary,
-        aggregate: aggregateSnapshot,
-      };
+        askMetrics: result.metrics,
+        retrySummary,
+        aggregateSnapshot,
+        answer: result.answer,
+        response: result.response,
+      });
 
       console.info(
         '[chat_perf]',
         JSON.stringify({
           status: 'ok',
           mode: 'progress',
+          traceId,
           agentProfile: resolvedAgentProfile,
           topicHint: topicHint ?? null,
           ...metrics,
@@ -583,6 +590,7 @@ export function createApp(): express.Express {
       writeProgressEvent(res, {
         type: 'result',
         payload: {
+          traceId,
           answer: result.answer,
           response: result.response,
           responseId: result.response?.id,
@@ -598,6 +606,7 @@ export function createApp(): express.Express {
         JSON.stringify({
           status: 'error',
           mode: 'progress',
+          traceId,
           agentProfile: resolvedAgentProfile,
           topicHint: topicHint ?? null,
           totalMs,
@@ -617,6 +626,7 @@ export function createApp(): express.Express {
   });
 
   app.post('/api/chat/stream', async (req, res) => {
+    const traceId = createTraceId();
     const requestStartMs = Date.now();
     let moderationMs = 0;
     let vectorStoreMs = 0;
@@ -711,6 +721,7 @@ export function createApp(): express.Express {
       writeProgressEvent(res, {
         type: 'result',
         payload: {
+          traceId,
           answer: FALLBACK_MESSAGE,
           response: null,
         },
@@ -736,6 +747,7 @@ export function createApp(): express.Express {
         writeProgressEvent(res, {
           type: 'result',
           payload: {
+            traceId,
             answer: "I'm sorry, but I can’t help with that request.",
             response: null,
           },
@@ -793,22 +805,25 @@ export function createApp(): express.Express {
       const retrySummary = summarizeRetryMetrics(result.metrics.retries);
       const aggregateSnapshot = updateChatPerfAggregate(retrySummary);
       const totalMs = Date.now() - requestStartMs;
-      const metrics = {
+      const metrics = buildChatMetrics({
         totalMs,
         moderationMs,
         vectorStoreMs,
         askMs,
-        ask: result.metrics,
-        stream: result.streamMetrics,
-        retries: retrySummary,
-        aggregate: aggregateSnapshot,
-      };
+        askMetrics: result.metrics,
+        streamMetrics: result.streamMetrics,
+        retrySummary,
+        aggregateSnapshot,
+        answer: result.answer,
+        response: result.response,
+      });
 
       console.info(
         '[chat_perf]',
         JSON.stringify({
           status: 'ok',
           mode: 'token_stream',
+          traceId,
           agentProfile: resolvedAgentProfile,
           topicHint: topicHint ?? null,
           ...metrics,
@@ -819,6 +834,7 @@ export function createApp(): express.Express {
       writeProgressEvent(res, {
         type: 'result',
         payload: {
+          traceId,
           answer: result.answer,
           response: result.response,
           responseId: result.response?.id,
@@ -834,6 +850,7 @@ export function createApp(): express.Express {
         JSON.stringify({
           status: 'error',
           mode: 'token_stream',
+          traceId,
           agentProfile: resolvedAgentProfile,
           topicHint: topicHint ?? null,
           totalMs,
@@ -853,6 +870,7 @@ export function createApp(): express.Express {
   });
 
   app.post('/api/chat', async (req, res) => {
+    const traceId = createTraceId();
     const requestStartMs = Date.now();
     let moderationMs = 0;
     let vectorStoreMs = 0;
@@ -929,7 +947,7 @@ export function createApp(): express.Express {
     }
 
     if (OUT_OF_SCOPE_PATTERN.test(message)) {
-      res.status(200).json({ answer: FALLBACK_MESSAGE, response: null });
+      res.status(200).json({ traceId, answer: FALLBACK_MESSAGE, response: null });
       return;
     }
 
@@ -945,6 +963,7 @@ export function createApp(): express.Express {
         moderation.results?.some((result: { flagged?: boolean }) => result.flagged === true) ?? false;
       if (flagged) {
         res.status(200).json({
+          traceId,
           answer: "I'm sorry, but I can’t help with that request.",
           response: null,
         });
@@ -970,20 +989,23 @@ export function createApp(): express.Express {
       const retrySummary = summarizeRetryMetrics(result.metrics.retries);
       const aggregateSnapshot = updateChatPerfAggregate(retrySummary);
       const totalMs = Date.now() - requestStartMs;
-      const metrics = {
+      const metrics = buildChatMetrics({
         totalMs,
         moderationMs,
         vectorStoreMs,
         askMs,
-        ask: result.metrics,
-        retries: retrySummary,
-        aggregate: aggregateSnapshot,
-      };
+        askMetrics: result.metrics,
+        retrySummary,
+        aggregateSnapshot,
+        answer: result.answer,
+        response: result.response,
+      });
 
       console.info(
         '[chat_perf]',
         JSON.stringify({
           status: 'ok',
+          traceId,
           agentProfile: resolvedAgentProfile,
           topicHint: topicHint ?? null,
           ...metrics,
@@ -991,6 +1013,7 @@ export function createApp(): express.Express {
       );
 
       res.json({
+        traceId,
         answer: result.answer,
         response: result.response,
         responseId: result.response?.id,
@@ -1002,6 +1025,7 @@ export function createApp(): express.Express {
         '[chat_perf]',
         JSON.stringify({
           status: 'error',
+          traceId,
           agentProfile: resolvedAgentProfile,
           topicHint: topicHint ?? null,
           totalMs,
@@ -1180,6 +1204,101 @@ export function createApp(): express.Express {
 function countUrls(message: string): number {
   const matches = message.match(/https?:\/\/\S+/gi);
   return matches ? matches.length : 0;
+}
+
+function createTraceId(): string {
+  try {
+    return randomUUID();
+  } catch {
+    return `trace_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+function countAnswerSourceEntries(answer: string): number {
+  const markerMatch = /(^|\n)\s*Sources\s*:/i.exec(answer);
+  if (!markerMatch) {
+    return 0;
+  }
+
+  const afterMarker = answer
+    .slice(markerMatch.index + markerMatch[0].length)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  return afterMarker.length;
+}
+
+function summarizeToolCalls(response: unknown): { webSearchCallCount: number; fileSearchCallCount: number } {
+  if (!response || typeof response !== 'object') {
+    return { webSearchCallCount: 0, fileSearchCallCount: 0 };
+  }
+
+  const output = (response as { output?: unknown }).output;
+  if (!Array.isArray(output)) {
+    return { webSearchCallCount: 0, fileSearchCallCount: 0 };
+  }
+
+  let webSearchCallCount = 0;
+  let fileSearchCallCount = 0;
+  for (const item of output) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    const itemType = String((item as { type?: unknown }).type ?? '');
+    if (itemType.includes('web_search_call')) {
+      webSearchCallCount += 1;
+    }
+    if (itemType.includes('file_search_call')) {
+      fileSearchCallCount += 1;
+    }
+  }
+
+  return { webSearchCallCount, fileSearchCallCount };
+}
+
+function buildChatMetrics(params: {
+  totalMs: number;
+  moderationMs: number;
+  vectorStoreMs: number;
+  askMs: number;
+  askMetrics: unknown;
+  retrySummary: { triggered: boolean; attemptedCount: number; successCount: number };
+  aggregateSnapshot: {
+    totalRequests: number;
+    retryTriggeredRequests: number;
+    retryAttemptCount: number;
+    retrySuccessCount: number;
+    retryTriggeredRate: number;
+    retrySuccessRate: number;
+  };
+  answer: string;
+  response: unknown;
+  streamMetrics?: unknown;
+}) {
+  const toolCalls = summarizeToolCalls(params.response);
+  const sourceCount = countAnswerSourceEntries(params.answer);
+
+  return {
+    totalMs: params.totalMs,
+    moderationMs: params.moderationMs,
+    vectorStoreMs: params.vectorStoreMs,
+    askMs: params.askMs,
+    ask: params.askMetrics,
+    ...(params.streamMetrics ? { stream: params.streamMetrics } : {}),
+    retries: params.retrySummary,
+    aggregate: params.aggregateSnapshot,
+    retrieval: {
+      webSearchCallCount: toolCalls.webSearchCallCount,
+      fileSearchCallCount: toolCalls.fileSearchCallCount,
+      retryAttemptCount: params.retrySummary.attemptedCount,
+      retrySuccessCount: params.retrySummary.successCount,
+    },
+    output: {
+      answerChars: params.answer.length,
+      sourceCount,
+    },
+  };
 }
 
 function buildRealtimeInstructions(): string {

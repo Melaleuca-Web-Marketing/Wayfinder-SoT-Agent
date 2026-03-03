@@ -596,6 +596,15 @@ function buildCsrRetryUserContent(userContent: ResponseInputMessageContentList):
   });
 }
 
+function shouldSendTemperature(agentProfile: AgentProfile, reasoningEffort?: ReasoningEffort): boolean {
+  if (agentProfile !== 'csr') {
+    return false;
+  }
+
+  // GPT-5 reasoning modes reject temperature; keep temperature only when reasoning is not requested.
+  return reasoningEffort == null;
+}
+
 function extractFirstMessageText(response: Response): string {
   for (const item of response.output ?? []) {
     if (item.type === 'message') {
@@ -696,7 +705,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
         agent_profile: agentProfile,
         ...(metadataExtras ?? {}),
       },
-      ...(agentProfile === 'csr' ? { temperature: 0.2 } : {}),
+      ...(shouldSendTemperature(agentProfile, params.reasoningEffort) ? { temperature: 0.2 } : {}),
       ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
       ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
     }) as const;
@@ -904,7 +913,7 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
         agent_profile: agentProfile,
         ...(metadataExtras ?? {}),
       },
-      ...(agentProfile === 'csr' ? { temperature: 0.2 } : {}),
+      ...(shouldSendTemperature(agentProfile, params.reasoningEffort) ? { temperature: 0.2 } : {}),
       ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
       ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
     }) as const;

@@ -335,6 +335,61 @@ a:hover {
   color: #0e3b22;
 }
 
+.chat-trace {
+  margin-top: 0.75rem;
+  border: 1px solid rgba(48, 134, 45, 0.22);
+  border-radius: 0.7rem;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.chat-trace summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #20613a;
+}
+
+.chat-trace summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-trace-grid {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  padding: 0 0.65rem 0.65rem;
+}
+
+.chat-trace-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.chat-trace-item span {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #4f6a59;
+}
+
+.chat-trace-item strong,
+.chat-trace-item code {
+  font-size: 0.72rem;
+  color: #243d2f;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.chat-trace-item code {
+  font-family: 'Roboto Mono', Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
 .chat-content-images {
   margin-top: 0.75rem;
   display: flex;
