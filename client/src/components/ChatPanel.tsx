@@ -25,6 +25,7 @@ interface ChatTurn {
   content: string;
   streaming?: boolean;
   images?: ChatImage[];
+  trace?: TurnTrace;
 }
 
 interface AttachmentDraft {
@@ -39,6 +40,20 @@ interface AttachmentDraft {
 type VoiceStatus = 'idle' | 'connecting' | 'active';
 type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low' | 'gpt-5.2-none' | 'gpt-5.2-low';
 type ResponseMode = 'not-tested' | 'token-stream' | 'progress-fallback';
+
+interface TurnTrace {
+  mode: Exclude<ResponseMode, 'not-tested'>;
+  traceId?: string;
+  responseId?: string;
+  client: {
+    sentAt: string;
+    firstTokenAt?: string;
+    doneAt: string;
+    timeToFirstTokenMs?: number;
+    totalMs: number;
+  };
+  backend?: ChatResponseBody['metrics'];
+}
 
 const MAX_ATTACHMENTS = 3;
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024; // 4MB
@@ -133,6 +148,26 @@ const shouldFallbackToProgress = (error: unknown): boolean => {
 
   const normalized = error.message.toLowerCase();
   return normalized.includes('token streaming endpoint is disabled') || normalized.includes('status 404');
+};
+
+const formatMs = (value: number | undefined): string => {
+  if (value == null || Number.isNaN(value)) {
+    return 'n/a';
+  }
+  return `${Math.max(0, Math.round(value))} ms`;
+};
+
+const formatTimestamp = (iso: string | undefined): string => {
+  if (!iso) {
+    return 'n/a';
+  }
+
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'n/a';
+  }
+
+  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
 
 export function ChatPanel() {
@@ -391,6 +426,18 @@ export function ChatPanel() {
       setChatProgressMessage('Running safety checks...');
 
       try {
+        const requestSentAtMs = Date.now();
+        const requestSentPerfMs = performance.now();
+        let firstTokenAtMs: number | undefined;
+        let firstTokenPerfMs: number | undefined;
+        const markFirstToken = () => {
+          if (firstTokenAtMs != null) {
+            return;
+          }
+          firstTokenAtMs = Date.now();
+          firstTokenPerfMs = performance.now();
+        };
+
         const draftMessageId = makeId();
         let activeDraftId: string | null = null;
 
@@ -438,6 +485,29 @@ export function ChatPanel() {
           });
         };
 
+        const finalizeDraft = (content: string, trace: TurnTrace) => {
+          setMessages((prev) => {
+            let found = false;
+            const next = prev.map((turn) => {
+              if (turn.id !== draftMessageId) {
+                return turn;
+              }
+              found = true;
+              return {
+                ...turn,
+                content,
+                streaming: false,
+                trace,
+              };
+            });
+
+            if (!found) {
+              next.push({ id: draftMessageId, role: 'assistant', content, streaming: false, trace });
+            }
+            return next;
+          });
+        };
+
         const requestBody: ChatRequestBody = {
           message: trimmed,
           topicHint,
@@ -457,6 +527,7 @@ export function ChatPanel() {
                 setChatProgressMessage(event.message);
                 break;
               case 'delta':
+                markFirstToken();
                 if (activeDraftId && event.draftId !== activeDraftId) {
                   activeDraftId = event.draftId;
                   replaceDraft(event.text, true);
@@ -476,6 +547,7 @@ export function ChatPanel() {
                 );
                 break;
               case 'result':
+                markFirstToken();
                 replaceDraft(event.payload.answer, false);
                 setChatProgressMessage('Finalizing response...');
                 break;
@@ -494,23 +566,15 @@ export function ChatPanel() {
 
           usedTokenStream = false;
           setResponseMode('progress-fallback');
-          setMessages((prev) => prev.filter((turn) => turn.id !== draftMessageId));
+          replaceDraft('', true);
           data = await sendChatRequestWithProgress(requestBody, (event: ChatProgressEvent) => {
             if (event.type === 'status') {
               setChatProgressMessage(event.message);
             } else if (event.type === 'result') {
+              markFirstToken();
               setChatProgressMessage('Finalizing response...');
             }
           });
-        }
-
-        if (usedTokenStream) {
-          replaceDraft(data.answer, false);
-        } else {
-          setMessages((prev) => [
-            ...prev.filter((turn) => turn.id !== draftMessageId),
-            { id: makeId(), role: 'assistant', content: data.answer },
-          ]);
         }
 
         const responseId =
@@ -518,6 +582,27 @@ export function ChatPanel() {
           (data.response && typeof data.response === 'object' && 'id' in data.response ?
             (data.response as { id?: string }).id
           : undefined);
+
+        const doneAtMs = Date.now();
+        const donePerfMs = performance.now();
+        const totalClientMs = Math.max(0, Math.round(donePerfMs - requestSentPerfMs));
+        const timeToFirstTokenMs =
+          firstTokenPerfMs != null ? Math.max(0, Math.round(firstTokenPerfMs - requestSentPerfMs)) : undefined;
+        const trace: TurnTrace = {
+          mode: usedTokenStream ? 'token-stream' : 'progress-fallback',
+          traceId: data.traceId,
+          responseId,
+          client: {
+            sentAt: new Date(requestSentAtMs).toISOString(),
+            ...(firstTokenAtMs != null ? { firstTokenAt: new Date(firstTokenAtMs).toISOString() } : {}),
+            doneAt: new Date(doneAtMs).toISOString(),
+            ...(timeToFirstTokenMs != null ? { timeToFirstTokenMs } : {}),
+            totalMs: totalClientMs,
+          },
+          backend: data.metrics,
+        };
+
+        finalizeDraft(data.answer, trace);
         setPreviousResponseId(responseId ?? null);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Chat request failed');
@@ -822,6 +907,96 @@ export function ChatPanel() {
                       )}
                     </div>
                   </div>
+                )}
+                {turn.role === 'assistant' && turn.trace && (
+                  <details className="chat-trace">
+                    <summary>Latency trace</summary>
+                    <div className="chat-trace-grid">
+                      <div className="chat-trace-item">
+                        <span>Mode</span>
+                        <strong>{turn.trace.mode === 'token-stream' ? 'Token stream' : 'Progress fallback'}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Client total</span>
+                        <strong>{formatMs(turn.trace.client.totalMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Client first token</span>
+                        <strong>{formatMs(turn.trace.client.timeToFirstTokenMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Sent at</span>
+                        <strong>{formatTimestamp(turn.trace.client.sentAt)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Done at</span>
+                        <strong>{formatTimestamp(turn.trace.client.doneAt)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Backend total</span>
+                        <strong>{formatMs(turn.trace.backend?.totalMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Moderation</span>
+                        <strong>{formatMs(turn.trace.backend?.moderationMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Vector store</span>
+                        <strong>{formatMs(turn.trace.backend?.vectorStoreMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Ask total</span>
+                        <strong>{formatMs(turn.trace.backend?.askMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Image analysis</span>
+                        <strong>{formatMs(turn.trace.backend?.ask?.imageAnalysisMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Initial response</span>
+                        <strong>{formatMs(turn.trace.backend?.ask?.initialResponseMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Stream first delta</span>
+                        <strong>{formatMs(turn.trace.backend?.stream?.timeToFirstDeltaMs)}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Draft revisions</span>
+                        <strong>{turn.trace.backend?.stream?.draftRevisionCount ?? 'n/a'}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Web searches</span>
+                        <strong>{turn.trace.backend?.retrieval?.webSearchCallCount ?? 'n/a'}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>File searches</span>
+                        <strong>{turn.trace.backend?.retrieval?.fileSearchCallCount ?? 'n/a'}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Retries (attempt/success)</span>
+                        <strong>
+                          {(turn.trace.backend?.retries?.attemptedCount ?? 0).toString()}/
+                          {(turn.trace.backend?.retries?.successCount ?? 0).toString()}
+                        </strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Answer chars</span>
+                        <strong>{turn.trace.backend?.output?.answerChars ?? 'n/a'}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Source count</span>
+                        <strong>{turn.trace.backend?.output?.sourceCount ?? 'n/a'}</strong>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Trace ID</span>
+                        <code>{turn.trace.traceId ?? 'n/a'}</code>
+                      </div>
+                      <div className="chat-trace-item">
+                        <span>Response ID</span>
+                        <code>{turn.trace.responseId ?? 'n/a'}</code>
+                      </div>
+                    </div>
+                  </details>
                 )}
               </div>
             </div>
