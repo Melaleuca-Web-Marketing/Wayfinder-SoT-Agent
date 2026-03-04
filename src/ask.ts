@@ -113,6 +113,7 @@ const IMAGE_ANALYSIS_MODEL = process.env.IMAGE_ANALYSIS_MODEL ?? 'gpt-4o-mini';
 const ENABLE_RETRIEVAL_DEBUG_LOGS = parseBooleanEnv('ENABLE_RETRIEVAL_DEBUG_LOGS', false);
 const MAX_DEBUG_PREVIEW_CHARS = Number(process.env.RETRIEVAL_DEBUG_PREVIEW_CHARS ?? '220');
 const MAX_DEBUG_ITEMS = Number(process.env.RETRIEVAL_DEBUG_MAX_ITEMS ?? '6');
+const DEFAULT_CHAT_TEMPERATURE = Number(process.env.CHAT_TEMPERATURE ?? '0');
 const IMAGE_ANALYSIS_SCHEMA = {
   name: 'image_extraction',
   schema: {
@@ -625,13 +626,17 @@ function buildCsrRetryUserContent(userContent: ResponseInputMessageContentList):
   });
 }
 
-function shouldSendTemperature(agentProfile: AgentProfile, reasoningEffort?: ReasoningEffort): boolean {
-  if (agentProfile !== 'csr') {
-    return false;
+function resolveChatTemperature(reasoningEffort?: ReasoningEffort): number | undefined {
+  // GPT-5 reasoning modes reject temperature; only send temperature when reasoning is not requested.
+  if (reasoningEffort != null) {
+    return undefined;
   }
 
-  // GPT-5 reasoning modes reject temperature; keep temperature only when reasoning is not requested.
-  return reasoningEffort == null;
+  if (!Number.isFinite(DEFAULT_CHAT_TEMPERATURE)) {
+    return 0;
+  }
+
+  return Math.min(2, Math.max(0, DEFAULT_CHAT_TEMPERATURE));
 }
 
 function toPreview(value: unknown): string | undefined {
@@ -844,7 +849,9 @@ export async function ask(params: AskParams): Promise<AskResult> {
   const buildRequestBase = (
     content: ResponseInputMessageContentList,
     metadataExtras?: Record<string, string>,
-  ) =>
+  ) => {
+    const temperature = resolveChatTemperature(params.reasoningEffort);
+    return (
     ({
       model,
       max_output_tokens: MAX_OUTPUT_TOKENS,
@@ -870,10 +877,12 @@ export async function ask(params: AskParams): Promise<AskResult> {
         agent_profile: agentProfile,
         ...(metadataExtras ?? {}),
       },
-      ...(shouldSendTemperature(agentProfile, params.reasoningEffort) ? { temperature: 0.2 } : {}),
+      ...(temperature != null ? { temperature } : {}),
       ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
       ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
-    }) as const;
+    }) as const
+    );
+  };
 
   const requestBase = buildRequestBase(userContent);
 
@@ -1062,7 +1071,9 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
   const buildRequestBase = (
     content: ResponseInputMessageContentList,
     metadataExtras?: Record<string, string>,
-  ) =>
+  ) => {
+    const temperature = resolveChatTemperature(params.reasoningEffort);
+    return (
     ({
       model,
       max_output_tokens: MAX_OUTPUT_TOKENS,
@@ -1088,10 +1099,12 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
         agent_profile: agentProfile,
         ...(metadataExtras ?? {}),
       },
-      ...(shouldSendTemperature(agentProfile, params.reasoningEffort) ? { temperature: 0.2 } : {}),
+      ...(temperature != null ? { temperature } : {}),
       ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
       ...(params.previousResponseId ? { previous_response_id: params.previousResponseId } : {}),
-    }) as const;
+    }) as const
+    );
+  };
 
   const requestBase = buildRequestBase(userContent);
   let activeDraftId = 'draft_1';
