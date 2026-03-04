@@ -92,6 +92,7 @@ const ALLOWED_ADMIN_MODEL_PRESETS = new Set<AdminModelPreset>([
   'gpt-5.2-none',
   'gpt-5.2-low',
 ]);
+const DEFAULT_ADMIN_MODEL_PRESET = resolveDefaultAdminModelPreset(process.env.ADMIN_MODEL_DEFAULT_PRESET);
 const ADMIN_MODEL_PRESET_GPT_4_1 = process.env.ADMIN_MODEL_PRESET_GPT_4_1 ?? 'gpt-4.1';
 const ADMIN_MODEL_PRESET_GPT_5_1 = process.env.ADMIN_MODEL_PRESET_GPT_5_1 ?? 'gpt-5.1';
 const ADMIN_MODEL_PRESET_GPT_5_2 = process.env.ADMIN_MODEL_PRESET_GPT_5_2 ?? 'gpt-5.2';
@@ -144,6 +145,14 @@ function resolveAdminModelPreset(preset: AdminModelPreset): { model: string; rea
   }
 }
 
+function resolveDefaultAdminModelPreset(raw: string | undefined): AdminModelPreset {
+  const normalized = raw?.trim().toLowerCase();
+  if (normalized && ALLOWED_ADMIN_MODEL_PRESETS.has(normalized as AdminModelPreset)) {
+    return normalized as AdminModelPreset;
+  }
+  return 'gpt-5.2-low';
+}
+
 export function createApp(): express.Express {
   const app = express();
 
@@ -171,7 +180,7 @@ export function createApp(): express.Express {
   app.get('/api/status', async (_req, res) => {
     try {
       const modelInfo = await vectorStoreClient.models.retrieve(settings.model);
-      res.json({ ok: true, model: modelInfo.id });
+      res.json({ ok: true, model: modelInfo.id, defaultAdminModelPreset: DEFAULT_ADMIN_MODEL_PRESET });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       res.status(500).json({ ok: false, error: message });
@@ -449,15 +458,16 @@ export function createApp(): express.Express {
       return;
     }
 
-    const adminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
-    if (adminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(adminModelPreset)) {
+    const requestedAdminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
+    if (requestedAdminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(requestedAdminModelPreset)) {
       res.status(400).json({
         error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low',
       });
       return;
     }
 
-    const modelPresetOverride = adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
+    const resolvedAdminModelPreset = requestedAdminModelPreset ?? DEFAULT_ADMIN_MODEL_PRESET;
+    const modelPresetOverride = resolveAdminModelPreset(resolvedAdminModelPreset);
 
     const message = typeof rawMessage === 'string' ? rawMessage : '';
 
@@ -672,15 +682,16 @@ export function createApp(): express.Express {
       return;
     }
 
-    const adminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
-    if (adminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(adminModelPreset)) {
+    const requestedAdminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
+    if (requestedAdminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(requestedAdminModelPreset)) {
       res.status(400).json({
         error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low',
       });
       return;
     }
 
-    const modelPresetOverride = adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
+    const resolvedAdminModelPreset = requestedAdminModelPreset ?? DEFAULT_ADMIN_MODEL_PRESET;
+    const modelPresetOverride = resolveAdminModelPreset(resolvedAdminModelPreset);
 
     const message = typeof rawMessage === 'string' ? rawMessage : '';
 
@@ -911,15 +922,16 @@ export function createApp(): express.Express {
       return;
     }
 
-    const adminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
-    if (adminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(adminModelPreset)) {
+    const requestedAdminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
+    if (requestedAdminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(requestedAdminModelPreset)) {
       res.status(400).json({
         error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low',
       });
       return;
     }
 
-    const modelPresetOverride = adminModelPreset ? resolveAdminModelPreset(adminModelPreset) : undefined;
+    const resolvedAdminModelPreset = requestedAdminModelPreset ?? DEFAULT_ADMIN_MODEL_PRESET;
+    const modelPresetOverride = resolveAdminModelPreset(resolvedAdminModelPreset);
 
     const message = typeof rawMessage === 'string' ? rawMessage : '';
 

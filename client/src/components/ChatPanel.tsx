@@ -136,9 +136,23 @@ const mapBackendModelToAdminPreset = (model: string | undefined): AdminModelPres
     return 'gpt-5.1-none';
   }
   if (normalized === 'gpt-5.2') {
-    return 'gpt-5.2-none';
+    return 'gpt-5.2-low';
   }
   return null;
+};
+
+const parseAdminModelPreset = (value: string | undefined): AdminModelPreset | null => {
+  const normalized = (value ?? '').trim().toLowerCase();
+  switch (normalized) {
+    case 'gpt-4.1':
+    case 'gpt-5.1-none':
+    case 'gpt-5.1-low':
+    case 'gpt-5.2-none':
+    case 'gpt-5.2-low':
+      return normalized;
+    default:
+      return null;
+  }
 };
 
 const shouldFallbackToProgress = (error: unknown): boolean => {
@@ -172,7 +186,7 @@ const formatTimestamp = (iso: string | undefined): string => {
 
 export function ChatPanel() {
   const [topicHint, setTopicHint] = useState<'melaleuca' | 'riverbend'>('melaleuca');
-  const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-5.2-none');
+  const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-5.2-low');
   const [responseMode, setResponseMode] = useState<ResponseMode>('not-tested');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatTurn[]>([]);
@@ -211,11 +225,12 @@ export function ChatPanel() {
         if (!res.ok) {
           return;
         }
-        const data = (await res.json()) as { ok?: boolean; model?: string };
+        const data = (await res.json()) as { ok?: boolean; model?: string; defaultAdminModelPreset?: string };
         if (!data.ok || hasManualModelSelectionRef.current || cancelled) {
           return;
         }
-        const mappedPreset = mapBackendModelToAdminPreset(data.model);
+        const mappedPreset =
+          parseAdminModelPreset(data.defaultAdminModelPreset) ?? mapBackendModelToAdminPreset(data.model);
         if (mappedPreset) {
           setAdminModelPreset(mappedPreset);
         }
