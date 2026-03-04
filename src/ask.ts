@@ -110,6 +110,9 @@ const ADMIN_FALLBACK_MESSAGE_PREFIX = "I couldn't confirm from our site or files
 const CSR_FALLBACK_MESSAGE = 'No verified sources found.';
 const MAX_OUTPUT_TOKENS = Number(process.env.MAX_OUTPUT_TOKENS ?? '6000');
 const IMAGE_ANALYSIS_MODEL = process.env.IMAGE_ANALYSIS_MODEL ?? 'gpt-4o-mini';
+const ENABLE_RETRIEVAL_DEBUG_LOGS = parseBooleanEnv('ENABLE_RETRIEVAL_DEBUG_LOGS', false);
+const MAX_DEBUG_PREVIEW_CHARS = Number(process.env.RETRIEVAL_DEBUG_PREVIEW_CHARS ?? '220');
+const MAX_DEBUG_ITEMS = Number(process.env.RETRIEVAL_DEBUG_MAX_ITEMS ?? '6');
 const IMAGE_ANALYSIS_SCHEMA = {
   name: 'image_extraction',
   schema: {
@@ -140,6 +143,28 @@ const IMAGE_ANALYSIS_SCHEMA = {
     },
   },
 } as const;
+
+function parseBooleanEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (raw == null) {
+    return fallback;
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes' || normalized === 'on') {
+    return true;
+  }
+
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'off') {
+    return false;
+  }
+
+  return fallback;
+}
 
 function inferTopicHint(message: string): TopicHint {
   const normalized = message.toLowerCase();
@@ -290,6 +315,8 @@ function buildAdminSystemPrompt(domainConfig: DomainConfig): string {
     `3. If both fail, respond with: "${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallbackUrl}."\n\n` +
     `Grounding & citations\n` +
     `- Only synthesize from retrieved sources.\n` +
+    `- Copy product names, ingredient names, dosage language, and claims verbatim from cited sources. Do not normalize or "fix" spellings.\n` +
+    `- If spelling appears inconsistent across sources, quote the exact source phrase and note the discrepancy.\n` +
     `- Always include a Sources section listing exact URLs (or document titles + canonical_id for files).\n\n` +
     `Image handling\n` +
     `- If the user uploads images, inspect them first. Extract visible text (product names, claims, numbers) and describe notable visual details.\n` +
@@ -323,6 +350,8 @@ function buildCsrSystemPrompt(domainConfig: DomainConfig): string {
     `2. If on-domain results are weak, call file_search on the provided vector stores.\n` +
     `3. If both fail, respond exactly with: "${CSR_FALLBACK_MESSAGE}"\n` +
     `- Only provide information supported by listed resources; do not speculate.\n` +
+    `- Copy product names, ingredient names, dosage language, and claims verbatim from cited sources. Do not normalize or "fix" spellings.\n` +
+    `- If spelling appears inconsistent across sources, quote the exact source phrase and note the discrepancy.\n` +
     `- Prefer the most recent official Melaleuca documentation (policies, product pages, SOPs, knowledge articles).\n` +
     `- If resources conflict, note the discrepancy, choose the most recent/authoritative source, and advise to escalate to supervisor.\n` +
     `- When dates, versions, or effective periods are known, mention them.\n` +
@@ -605,6 +634,142 @@ function shouldSendTemperature(agentProfile: AgentProfile, reasoningEffort?: Rea
   return reasoningEffort == null;
 }
 
+function toPreview(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.slice(0, Math.max(40, MAX_DEBUG_PREVIEW_CHARS));
+}
+
+function extractFileSearchResultPreview(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object') {
+    return undefined;
+  }
+
+  const item = result as Record<string, unknown>;
+  const direct =
+    toPreview(item.text) ??
+    toPreview(item.content) ??
+    toPreview((item.chunk as Record<string, unknown> | undefined)?.text) ??
+    toPreview((item.document as Record<string, unknown> | undefined)?.text);
+  if (direct) {
+    return direct;
+  }
+
+  if (Array.isArray(item.content)) {
+    const joined = item.content
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return '';
+        }
+        const typed = entry as Record<string, unknown>;
+        return toPreview(typed.text) ?? '';
+      })
+      .filter((entry) => entry.length > 0)
+      .join(' ');
+    return toPreview(joined);
+  }
+
+  return undefined;
+}
+
+function buildRetrievalDebugSummary(response: Response): {
+  webSearchCalls: Array<{ sourceCount: number; sources: Array<{ title?: string; url?: string }> }>;
+  fileSearchCalls: Array<{ resultCount: number; results: Array<{ file?: string; score?: number; snippet?: string }> }>;
+  sourceEntries: string[];
+} {
+  const webSearchCalls: Array<{ sourceCount: number; sources: Array<{ title?: string; url?: string }> }> = [];
+  const fileSearchCalls: Array<{ resultCount: number; results: Array<{ file?: string; score?: number; snippet?: string }> }> = [];
+
+  for (const outputItem of response.output ?? []) {
+    if (!outputItem || typeof outputItem !== 'object') {
+      continue;
+    }
+
+    const item = outputItem as unknown as Record<string, unknown>;
+    const type = String(item.type ?? '');
+
+    if (type.includes('web_search_call')) {
+      const rawSources = ((item.action as Record<string, unknown> | undefined)?.sources ?? []) as unknown[];
+      const sources = rawSources
+        .slice(0, Math.max(1, MAX_DEBUG_ITEMS))
+        .map((source) => {
+          if (!source || typeof source !== 'object') {
+            return {};
+          }
+          const typed = source as Record<string, unknown>;
+          return {
+            title: typeof typed.title === 'string' ? typed.title : undefined,
+            url: typeof typed.url === 'string' ? typed.url : undefined,
+          };
+        });
+
+      webSearchCalls.push({
+        sourceCount: Array.isArray(rawSources) ? rawSources.length : 0,
+        sources,
+      });
+      continue;
+    }
+
+    if (type.includes('file_search_call')) {
+      const rawResults = (item.results ?? []) as unknown[];
+      const results = rawResults.slice(0, Math.max(1, MAX_DEBUG_ITEMS)).map((result) => {
+        const typed = (result && typeof result === 'object' ? result : {}) as Record<string, unknown>;
+        const file =
+          (typeof typed.filename === 'string' && typed.filename) ||
+          (typeof typed.file_id === 'string' && typed.file_id) ||
+          (typeof typed.document_id === 'string' && typed.document_id) ||
+          undefined;
+        const score = typeof typed.score === 'number' ? typed.score : undefined;
+        const snippet = extractFileSearchResultPreview(result);
+        return { file, score, snippet };
+      });
+
+      fileSearchCalls.push({
+        resultCount: Array.isArray(rawResults) ? rawResults.length : 0,
+        results,
+      });
+    }
+  }
+
+  const sourceEntries = extractSourceEntries(normalizeAnswer(response)).slice(0, Math.max(1, MAX_DEBUG_ITEMS));
+  return { webSearchCalls, fileSearchCalls, sourceEntries };
+}
+
+function maybeLogRetrievalDebug(params: {
+  mode: 'ask' | 'ask_stream';
+  agentProfile: AgentProfile;
+  model: string;
+  topic: TopicHint;
+  message: string;
+  finalAnswer: string;
+  retries: AskRetryMetric[];
+  response: Response;
+}): void {
+  if (!ENABLE_RETRIEVAL_DEBUG_LOGS) {
+    return;
+  }
+
+  const summary = buildRetrievalDebugSummary(params.response);
+  console.info(
+    '[retrieval_debug]',
+    JSON.stringify({
+      mode: params.mode,
+      agentProfile: params.agentProfile,
+      model: params.model,
+      topic: params.topic,
+      messagePreview: toPreview(params.message),
+      answerPreview: toPreview(params.finalAnswer),
+      retries: params.retries,
+      ...summary,
+    }),
+  );
+}
+
 function extractFirstMessageText(response: Response): string {
   for (const item of response.output ?? []) {
     if (item.type === 'message') {
@@ -826,6 +991,16 @@ export async function ask(params: AskParams): Promise<AskResult> {
   }
 
   metrics.totalMs = Date.now() - askStartMs;
+  maybeLogRetrievalDebug({
+    mode: 'ask',
+    agentProfile,
+    model,
+    topic,
+    message,
+    finalAnswer,
+    retries: metrics.retries,
+    response,
+  });
   params.onProgress?.({ stage: 'done' });
 
   return {
@@ -1084,6 +1259,16 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
   }
 
   metrics.totalMs = Date.now() - askStartMs;
+  maybeLogRetrievalDebug({
+    mode: 'ask_stream',
+    agentProfile,
+    model,
+    topic,
+    message,
+    finalAnswer,
+    retries: metrics.retries,
+    response,
+  });
   params.onProgress?.({ stage: 'done' });
 
   return {
