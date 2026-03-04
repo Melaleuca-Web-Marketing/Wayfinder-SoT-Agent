@@ -99,6 +99,36 @@ const DEFAULT_HEADERS = {
   'Content-Type': 'application/json',
 };
 
+export interface TelemetrySessionRequestBody {
+  agentProfile: 'admin' | 'csr';
+  clientApp?: string;
+  clientSessionId?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TelemetrySessionResponseBody {
+  sessionId: string;
+  createdAt: string;
+}
+
+export interface TelemetryTurnRequestBody {
+  sessionId: string;
+  question: string;
+  answer: string;
+  responseMs?: number;
+  model?: string;
+  topicHint?: string;
+  responseId?: string;
+  requestedAt?: string;
+  respondedAt?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface TelemetryTurnResponseBody {
+  turnId: string;
+  createdAt: string;
+}
+
 export async function sendChatRequest(body: ChatRequestBody, abortSignal?: AbortSignal): Promise<ChatResponseBody> {
   const response = await fetch('/api/chat', {
     method: 'POST',
@@ -118,6 +148,42 @@ export async function sendChatRequest(body: ChatRequestBody, abortSignal?: Abort
 
 export async function fetchRealtimeToken(): Promise<Response> {
   return fetch('/api/realtime/token', { method: 'POST' });
+}
+
+export async function startTelemetrySession(
+  body: TelemetrySessionRequestBody,
+  abortSignal?: AbortSignal,
+): Promise<TelemetrySessionResponseBody> {
+  const response = await fetch('/api/telemetry/session', {
+    method: 'POST',
+    headers: DEFAULT_HEADERS,
+    body: JSON.stringify(body),
+    signal: abortSignal,
+  });
+
+  if (!response.ok) {
+    throw await buildError(response, 'Telemetry session request failed');
+  }
+
+  return response.json() as Promise<TelemetrySessionResponseBody>;
+}
+
+export async function recordTelemetryTurn(
+  body: TelemetryTurnRequestBody,
+  abortSignal?: AbortSignal,
+): Promise<TelemetryTurnResponseBody> {
+  const response = await fetch('/api/telemetry/turn', {
+    method: 'POST',
+    headers: DEFAULT_HEADERS,
+    body: JSON.stringify(body),
+    signal: abortSignal,
+  });
+
+  if (!response.ok) {
+    throw await buildError(response, 'Telemetry turn request failed');
+  }
+
+  return response.json() as Promise<TelemetryTurnResponseBody>;
 }
 
 async function buildError(response: Response, fallback: string): Promise<Error> {

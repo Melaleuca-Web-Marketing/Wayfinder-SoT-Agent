@@ -97,6 +97,7 @@ interface TelemetryStore {
   recordFeedback(input: RecordTelemetryFeedbackInput): Promise<TelemetryFeedback>;
   listSessions(limit: number): Promise<TelemetrySessionSummary[]>;
   getSessionDetail(sessionId: string): Promise<TelemetrySessionDetail | null>;
+  deleteSession(sessionId: string): Promise<void>;
 }
 
 interface FileTelemetryData {
@@ -241,6 +242,20 @@ class FileTelemetryStore implements TelemetryStore {
       session,
       turns,
     };
+  }
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.mutate((data) => {
+      const sessionExists = data.sessions.some((session) => session.id === sessionId);
+      if (!sessionExists) {
+        throw new TelemetryNotFoundError(`Session ${sessionId} not found.`);
+      }
+
+      const turnIds = new Set(data.turns.filter((turn) => turn.sessionId === sessionId).map((turn) => turn.id));
+      data.feedback = data.feedback.filter((entry) => !turnIds.has(entry.turnId));
+      data.turns = data.turns.filter((turn) => turn.sessionId !== sessionId);
+      data.sessions = data.sessions.filter((session) => session.id !== sessionId);
+    });
   }
 
   private async mutate(fn: (data: FileTelemetryData) => void): Promise<void> {
@@ -477,6 +492,22 @@ class PostgresTelemetryStore implements TelemetryStore {
     };
   }
 
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.ensureSchema();
+
+    const result = await this.pool.query(
+      `
+      DELETE FROM chat_sessions
+      WHERE id = $1
+      `,
+      [sessionId],
+    );
+
+    if (result.rowCount === 0) {
+      throw new TelemetryNotFoundError(`Session ${sessionId} not found.`);
+    }
+  }
+
   private async ensureSchema(): Promise<void> {
     if (!this.schemaReady) {
       this.schemaReady = this.initializeSchema();
@@ -656,6 +687,10 @@ export async function listTelemetrySessions(limit: number): Promise<TelemetrySes
 
 export async function getTelemetrySessionDetail(sessionId: string): Promise<TelemetrySessionDetail | null> {
   return store.getSessionDetail(sessionId);
+}
+
+export async function deleteTelemetrySession(sessionId: string): Promise<void> {
+  return store.deleteSession(sessionId);
 }
 
 export function isTelemetryNotFoundError(error: unknown): error is TelemetryNotFoundError {

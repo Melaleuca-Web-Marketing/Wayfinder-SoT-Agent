@@ -29,6 +29,7 @@ import {
 } from './vectorStore.js';
 import { settings } from './config.js';
 import {
+  deleteTelemetrySession,
   getTelemetrySessionDetail,
   isTelemetryNotFoundError,
   listTelemetrySessions,
@@ -411,6 +412,26 @@ export function createApp(): express.Express {
       }
       res.json(detail);
     } catch (error) {
+      const messageText = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: messageText });
+    }
+  });
+
+  app.delete('/api/telemetry/sessions/:sessionId', async (req, res) => {
+    const sessionId = req.params.sessionId?.trim();
+    if (!sessionId) {
+      res.status(400).json({ error: 'sessionId is required' });
+      return;
+    }
+
+    try {
+      await deleteTelemetrySession(sessionId);
+      res.status(204).end();
+    } catch (error) {
+      if (isTelemetryNotFoundError(error)) {
+        res.status(404).json({ error: error.message });
+        return;
+      }
       const messageText = error instanceof Error ? error.message : 'Unknown error';
       res.status(500).json({ error: messageText });
     }

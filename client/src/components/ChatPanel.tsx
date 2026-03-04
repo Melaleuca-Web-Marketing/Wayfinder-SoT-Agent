@@ -4,6 +4,8 @@ import {
   sendChatRequestWithTokenStream,
   sendChatRequestWithProgress,
   fetchRealtimeToken,
+  startTelemetrySession,
+  recordTelemetryTurn,
   type ChatRequestBody,
   type ChatProgressEvent,
   type ChatResponseBody,
@@ -205,6 +207,8 @@ export function ChatPanel() {
   const pendingIdsRef = useRef<{ user?: string; assistant?: string }>({});
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const hasManualModelSelectionRef = useRef(false);
+  const telemetrySessionIdRef = useRef<string | null>(null);
+  const telemetryClientSessionIdRef = useRef<string>(makeId());
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -334,6 +338,20 @@ export function ChatPanel() {
 
   const handleRemoveAttachment = useCallback((id: string) => {
     setAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+  }, []);
+
+  const ensureTelemetrySession = useCallback(async (): Promise<string> => {
+    if (telemetrySessionIdRef.current) {
+      return telemetrySessionIdRef.current;
+    }
+
+    const session = await startTelemetrySession({
+      agentProfile: 'admin',
+      clientApp: 'admin-web',
+      clientSessionId: telemetryClientSessionIdRef.current,
+    });
+    telemetrySessionIdRef.current = session.sessionId;
+    return session.sessionId;
   }, []);
 
   const finalizeMessage = useCallback((id?: string) => {
@@ -619,6 +637,29 @@ export function ChatPanel() {
 
         finalizeDraft(data.answer, trace);
         setPreviousResponseId(responseId ?? null);
+
+        void (async () => {
+          try {
+            const sessionId = await ensureTelemetrySession();
+            await recordTelemetryTurn({
+              sessionId,
+              question: displayContent,
+              answer: data.answer,
+              responseMs: data.metrics?.totalMs ?? totalClientMs,
+              model: adminModelPreset,
+              topicHint,
+              responseId,
+              requestedAt: new Date(requestSentAtMs).toISOString(),
+              respondedAt: new Date(doneAtMs).toISOString(),
+              metadata: {
+                responseMode: usedTokenStream ? 'token-stream' : 'progress-fallback',
+                traceId: data.traceId ?? null,
+              },
+            });
+          } catch (telemetryError) {
+            console.warn('Admin telemetry turn write failed:', telemetryError);
+          }
+        })();
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Chat request failed');
       } finally {
@@ -626,7 +667,7 @@ export function ChatPanel() {
         setChatProgressMessage(null);
       }
     },
-    [adminModelPreset, attachments, input, loading, messages, previousResponseId, topicHint],
+    [adminModelPreset, attachments, ensureTelemetrySession, input, loading, messages, previousResponseId, topicHint],
   );
 
   const stopVoiceSession = useCallback(() => {
@@ -811,6 +852,7 @@ export function ChatPanel() {
     setPreviousResponseId(null);
     setMessages([]);
     setAttachments([]);
+    telemetrySessionIdRef.current = null;
     setResponseMode('not-tested');
     setError(null);
   }, []);
@@ -822,6 +864,7 @@ export function ChatPanel() {
     setPreviousResponseId(null);
     setMessages([]);
     setAttachments([]);
+    telemetrySessionIdRef.current = null;
     setResponseMode('not-tested');
     setError(null);
   }, []);
@@ -873,6 +916,7 @@ export function ChatPanel() {
               setMessages([]);
               setAttachments([]);
               setPreviousResponseId(null);
+              telemetrySessionIdRef.current = null;
               setResponseMode('not-tested');
             }}
             disabled={loading}
