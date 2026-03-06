@@ -40,7 +40,15 @@ interface AttachmentDraft {
 }
 
 type VoiceStatus = 'idle' | 'connecting' | 'active';
-type AdminModelPreset = 'gpt-4.1' | 'gpt-5.1-none' | 'gpt-5.1-low' | 'gpt-5.2-none' | 'gpt-5.2-low';
+type AdminModelPreset =
+  | 'gpt-4.1'
+  | 'gpt-5.1-none'
+  | 'gpt-5.1-low'
+  | 'gpt-5.2-none'
+  | 'gpt-5.2-low'
+  | 'gpt-5.4-none'
+  | 'gpt-5.4-low'
+  | 'gpt-5.3-chat';
 type ResponseMode = 'not-tested' | 'token-stream' | 'progress-fallback';
 
 interface TurnTrace {
@@ -140,6 +148,12 @@ const mapBackendModelToAdminPreset = (model: string | undefined): AdminModelPres
   if (normalized === 'gpt-5.2') {
     return 'gpt-5.2-low';
   }
+  if (normalized === 'gpt-5.4') {
+    return 'gpt-5.4-low';
+  }
+  if (normalized === 'gpt-5.3-chat-latest') {
+    return 'gpt-5.3-chat';
+  }
   return null;
 };
 
@@ -151,6 +165,9 @@ const parseAdminModelPreset = (value: string | undefined): AdminModelPreset | nu
     case 'gpt-5.1-low':
     case 'gpt-5.2-none':
     case 'gpt-5.2-low':
+    case 'gpt-5.4-none':
+    case 'gpt-5.4-low':
+    case 'gpt-5.3-chat':
       return normalized;
     default:
       return null;
@@ -188,7 +205,7 @@ const formatTimestamp = (iso: string | undefined): string => {
 
 export function ChatPanel() {
   const [topicHint, setTopicHint] = useState<'melaleuca' | 'riverbend'>('melaleuca');
-  const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-5.2-low');
+  const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-5.4-low');
   const [responseMode, setResponseMode] = useState<ResponseMode>('not-tested');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatTurn[]>([]);
@@ -895,6 +912,9 @@ export function ChatPanel() {
               <option value="gpt-5.1-low">gpt-5.1-low</option>
               <option value="gpt-5.2-none">gpt-5.2-none</option>
               <option value="gpt-5.2-low">gpt-5.2-low</option>
+              <option value="gpt-5.4-none">gpt-5.4-none</option>
+              <option value="gpt-5.4-low">gpt-5.4-low</option>
+              <option value="gpt-5.3-chat">gpt-5.3-chat</option>
             </select>
           </label>
           <div className={`chat-mode-badge ${responseModeMeta.className}`} title="Runtime response delivery mode for the latest request.">

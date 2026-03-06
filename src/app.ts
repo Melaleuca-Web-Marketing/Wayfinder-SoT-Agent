@@ -85,18 +85,26 @@ type AdminModelPreset =
   | 'gpt-5.1-none'
   | 'gpt-5.1-low'
   | 'gpt-5.2-none'
-  | 'gpt-5.2-low';
+  | 'gpt-5.2-low'
+  | 'gpt-5.4-none'
+  | 'gpt-5.4-low'
+  | 'gpt-5.3-chat';
 const ALLOWED_ADMIN_MODEL_PRESETS = new Set<AdminModelPreset>([
   'gpt-4.1',
   'gpt-5.1-none',
   'gpt-5.1-low',
   'gpt-5.2-none',
   'gpt-5.2-low',
+  'gpt-5.4-none',
+  'gpt-5.4-low',
+  'gpt-5.3-chat',
 ]);
 const DEFAULT_ADMIN_MODEL_PRESET = resolveDefaultAdminModelPreset(process.env.ADMIN_MODEL_DEFAULT_PRESET);
 const ADMIN_MODEL_PRESET_GPT_4_1 = process.env.ADMIN_MODEL_PRESET_GPT_4_1 ?? 'gpt-4.1';
 const ADMIN_MODEL_PRESET_GPT_5_1 = process.env.ADMIN_MODEL_PRESET_GPT_5_1 ?? 'gpt-5.1';
 const ADMIN_MODEL_PRESET_GPT_5_2 = process.env.ADMIN_MODEL_PRESET_GPT_5_2 ?? 'gpt-5.2';
+const ADMIN_MODEL_PRESET_GPT_5_4 = process.env.ADMIN_MODEL_PRESET_GPT_5_4 ?? 'gpt-5.4';
+const ADMIN_MODEL_PRESET_GPT_5_3_CHAT = process.env.ADMIN_MODEL_PRESET_GPT_5_3_CHAT ?? 'gpt-5.3-chat-latest';
 const ENABLE_CHAT_TOKEN_STREAMING = parseBooleanEnv('ENABLE_CHAT_TOKEN_STREAMING', false);
 const ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY = parseBooleanEnv('ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY', false);
 const ENABLE_CHAT_TOKEN_STREAMING_CSR = parseBooleanEnv('ENABLE_CHAT_TOKEN_STREAMING_CSR', true);
@@ -141,6 +149,12 @@ function resolveAdminModelPreset(preset: AdminModelPreset): { model: string; rea
       return { model: ADMIN_MODEL_PRESET_GPT_5_2 };
     case 'gpt-5.2-low':
       return { model: ADMIN_MODEL_PRESET_GPT_5_2, reasoningEffort: 'low' };
+    case 'gpt-5.4-none':
+      return { model: ADMIN_MODEL_PRESET_GPT_5_4 };
+    case 'gpt-5.4-low':
+      return { model: ADMIN_MODEL_PRESET_GPT_5_4, reasoningEffort: 'low' };
+    case 'gpt-5.3-chat':
+      return { model: ADMIN_MODEL_PRESET_GPT_5_3_CHAT };
     default:
       return { model: settings.model };
   }
@@ -151,7 +165,7 @@ function resolveDefaultAdminModelPreset(raw: string | undefined): AdminModelPres
   if (normalized && ALLOWED_ADMIN_MODEL_PRESETS.has(normalized as AdminModelPreset)) {
     return normalized as AdminModelPreset;
   }
-  return 'gpt-5.2-low';
+  return 'gpt-5.4-low';
 }
 
 export function createApp(): express.Express {
@@ -482,7 +496,8 @@ export function createApp(): express.Express {
     const requestedAdminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
     if (requestedAdminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(requestedAdminModelPreset)) {
       res.status(400).json({
-        error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low',
+        error:
+          'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low, gpt-5.4-none, gpt-5.4-low, gpt-5.3-chat',
       });
       return;
     }
@@ -706,7 +721,8 @@ export function createApp(): express.Express {
     const requestedAdminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
     if (requestedAdminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(requestedAdminModelPreset)) {
       res.status(400).json({
-        error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low',
+        error:
+          'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low, gpt-5.4-none, gpt-5.4-low, gpt-5.3-chat',
       });
       return;
     }
@@ -946,7 +962,8 @@ export function createApp(): express.Express {
     const requestedAdminModelPreset = rawAdminModelPreset?.trim().toLowerCase() as AdminModelPreset | undefined;
     if (requestedAdminModelPreset && !ALLOWED_ADMIN_MODEL_PRESETS.has(requestedAdminModelPreset)) {
       res.status(400).json({
-        error: 'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low',
+        error:
+          'adminModelPreset must be one of: gpt-4.1, gpt-5.1-none, gpt-5.1-low, gpt-5.2-none, gpt-5.2-low, gpt-5.4-none, gpt-5.4-low, gpt-5.3-chat',
       });
       return;
     }
