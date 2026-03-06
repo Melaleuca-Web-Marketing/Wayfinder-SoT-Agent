@@ -113,6 +113,8 @@ const IMAGE_ANALYSIS_MODEL = process.env.IMAGE_ANALYSIS_MODEL ?? 'gpt-4o-mini';
 const ENABLE_RETRIEVAL_DEBUG_LOGS = parseBooleanEnv('ENABLE_RETRIEVAL_DEBUG_LOGS', false);
 const MAX_DEBUG_PREVIEW_CHARS = Number(process.env.RETRIEVAL_DEBUG_PREVIEW_CHARS ?? '220');
 const MAX_DEBUG_ITEMS = Number(process.env.RETRIEVAL_DEBUG_MAX_ITEMS ?? '6');
+const ENABLE_ANSWER_SELECTION_DEBUG_LOGS = parseBooleanEnv('ENABLE_ANSWER_SELECTION_DEBUG_LOGS', false);
+const MAX_ANSWER_DEBUG_CHARS = Number(process.env.ANSWER_DEBUG_MAX_CHARS ?? '12000');
 const IMAGE_ANALYSIS_SCHEMA = {
   name: 'image_extraction',
   schema: {
@@ -761,6 +763,96 @@ function maybeLogRetrievalDebug(params: {
   );
 }
 
+type AnswerSelectionSource = 'output_text' | 'assistant_last' | 'first_message' | 'empty';
+
+interface NormalizeAnswerSelection {
+  answer: string;
+  source: AnswerSelectionSource;
+  outputText: string;
+  assistantMessages: string[];
+  firstMessage: string;
+}
+
+function clipAnswerDebugText(value: string): string {
+  const limit = Number.isFinite(MAX_ANSWER_DEBUG_CHARS) ? Math.max(200, MAX_ANSWER_DEBUG_CHARS) : 12000;
+  if (value.length <= limit) {
+    return value;
+  }
+  const hidden = value.length - limit;
+  return `${value.slice(0, limit)}\n...[truncated ${hidden} chars]`;
+}
+
+function maybeLogAnswerSelectionDebug(params: {
+  mode: 'ask' | 'ask_stream';
+  phase: 'initial' | 'admin_retry' | 'csr_retry';
+  selection: NormalizeAnswerSelection;
+  finalAnswer: string;
+}): void {
+  if (!ENABLE_ANSWER_SELECTION_DEBUG_LOGS) {
+    return;
+  }
+
+  console.info(
+    '[answer_selection_debug]',
+    JSON.stringify({
+      mode: params.mode,
+      phase: params.phase,
+      selectedSource: params.selection.source,
+      assistantMessageCount: params.selection.assistantMessages.length,
+      outputText: clipAnswerDebugText(params.selection.outputText),
+      assistantMessages: params.selection.assistantMessages.map((entry) => clipAnswerDebugText(entry)),
+      firstMessage: clipAnswerDebugText(params.selection.firstMessage),
+      normalizedAnswer: clipAnswerDebugText(params.selection.answer),
+      finalAnswer: clipAnswerDebugText(params.finalAnswer),
+    }),
+  );
+}
+
+function selectNormalizedAnswer(response: Response): NormalizeAnswerSelection {
+  const outputText = typeof response.output_text === 'string' ? response.output_text.trim() : '';
+  const assistantMessages = extractAssistantMessages(response);
+  const firstMessage = extractFirstMessageText(response);
+
+  if (outputText) {
+    return {
+      answer: outputText,
+      source: 'output_text',
+      outputText,
+      assistantMessages,
+      firstMessage,
+    };
+  }
+
+  const lastMessage = assistantMessages[assistantMessages.length - 1];
+  if (lastMessage) {
+    return {
+      answer: lastMessage,
+      source: 'assistant_last',
+      outputText,
+      assistantMessages,
+      firstMessage,
+    };
+  }
+
+  if (firstMessage) {
+    return {
+      answer: firstMessage,
+      source: 'first_message',
+      outputText,
+      assistantMessages,
+      firstMessage,
+    };
+  }
+
+  return {
+    answer: '',
+    source: 'empty',
+    outputText,
+    assistantMessages,
+    firstMessage,
+  };
+}
+
 function extractFirstMessageText(response: Response): string {
   for (const item of response.output ?? []) {
     if (item.type === 'message') {
@@ -881,8 +973,10 @@ export async function ask(params: AskParams): Promise<AskResult> {
   metrics.initialResponseMs = Date.now() - initialResponseStartMs;
   params.onProgress?.({ stage: 'initial_response_complete' });
 
-  let answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
+  const initialSelection = selectNormalizedAnswer(response);
+  let answerWithSources = ensureSourcesSection(initialSelection.answer, params.images);
   let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, agentProfile, response, params.images, imageInsights);
+  maybeLogAnswerSelectionDebug({ mode: 'ask', phase: 'initial', selection: initialSelection, finalAnswer });
   if (!hasSourcesSection(answerWithSources)) {
     console.warn('Model response missing Sources section.');
   }
@@ -908,7 +1002,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
         params.vectorStoreIds,
         domainConfig,
       );
-      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retrySelection = selectNormalizedAnswer(retryResponse);
+      const retryAnswerWithSources = ensureSourcesSection(retrySelection.answer, params.images);
       const retryFinalAnswer = enforceSourceAllowlist(
         retryAnswerWithSources,
         domainConfig,
@@ -917,6 +1012,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
         params.images,
         imageInsights,
       );
+      maybeLogAnswerSelectionDebug({ mode: 'ask', phase: 'admin_retry', selection: retrySelection, finalAnswer: retryFinalAnswer });
 
       if (!hasSourcesSection(retryAnswerWithSources)) {
         console.warn('Model retry response missing Sources section.');
@@ -956,7 +1052,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
         params.vectorStoreIds,
         domainConfig,
       );
-      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retrySelection = selectNormalizedAnswer(retryResponse);
+      const retryAnswerWithSources = ensureSourcesSection(retrySelection.answer, params.images);
       const retryFinalAnswer = enforceSourceAllowlist(
         retryAnswerWithSources,
         domainConfig,
@@ -965,6 +1062,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
         params.images,
         imageInsights,
       );
+      maybeLogAnswerSelectionDebug({ mode: 'ask', phase: 'csr_retry', selection: retrySelection, finalAnswer: retryFinalAnswer });
 
       if (!hasSourcesSection(retryAnswerWithSources)) {
         console.warn('Model CSR retry response missing Sources section.');
@@ -1110,8 +1208,10 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
   params.onProgress?.({ stage: 'initial_response_complete' });
 
   let response = initialPass.response;
-  let answerWithSources = ensureSourcesSection(normalizeAnswer(response), params.images);
+  const initialSelection = selectNormalizedAnswer(response);
+  let answerWithSources = ensureSourcesSection(initialSelection.answer, params.images);
   let finalAnswer = enforceSourceAllowlist(answerWithSources, domainConfig, agentProfile, response, params.images, imageInsights);
+  maybeLogAnswerSelectionDebug({ mode: 'ask_stream', phase: 'initial', selection: initialSelection, finalAnswer });
   if (!hasSourcesSection(answerWithSources)) {
     console.warn('Model response missing Sources section.');
   }
@@ -1151,7 +1251,8 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
       streamMetrics.streamedCharsPass2 = retryPass.streamedChars;
 
       const retryResponse = retryPass.response;
-      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retrySelection = selectNormalizedAnswer(retryResponse);
+      const retryAnswerWithSources = ensureSourcesSection(retrySelection.answer, params.images);
       const retryFinalAnswer = enforceSourceAllowlist(
         retryAnswerWithSources,
         domainConfig,
@@ -1160,6 +1261,7 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
         params.images,
         imageInsights,
       );
+      maybeLogAnswerSelectionDebug({ mode: 'ask_stream', phase: 'admin_retry', selection: retrySelection, finalAnswer: retryFinalAnswer });
 
       if (!hasSourcesSection(retryAnswerWithSources)) {
         console.warn('Model retry response missing Sources section.');
@@ -1213,7 +1315,8 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
       streamMetrics.streamedCharsPass2 = retryPass.streamedChars;
 
       const retryResponse = retryPass.response;
-      const retryAnswerWithSources = ensureSourcesSection(normalizeAnswer(retryResponse), params.images);
+      const retrySelection = selectNormalizedAnswer(retryResponse);
+      const retryAnswerWithSources = ensureSourcesSection(retrySelection.answer, params.images);
       const retryFinalAnswer = enforceSourceAllowlist(
         retryAnswerWithSources,
         domainConfig,
@@ -1222,6 +1325,7 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
         params.images,
         imageInsights,
       );
+      maybeLogAnswerSelectionDebug({ mode: 'ask_stream', phase: 'csr_retry', selection: retrySelection, finalAnswer: retryFinalAnswer });
 
       if (!hasSourcesSection(retryAnswerWithSources)) {
         console.warn('Model CSR retry response missing Sources section.');
@@ -1275,17 +1379,7 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
 }
 
 function normalizeAnswer(response: Response): string {
-  const assistantMessages = extractAssistantMessages(response);
-  const lastMessage = assistantMessages[assistantMessages.length - 1];
-  if (lastMessage) {
-    return lastMessage;
-  }
-
-  if (response.output_text && response.output_text.trim().length > 0) {
-    return response.output_text.trim();
-  }
-
-  return extractFirstMessageText(response);
+  return selectNormalizedAnswer(response).answer;
 }
 
 function buildUserMessage(
