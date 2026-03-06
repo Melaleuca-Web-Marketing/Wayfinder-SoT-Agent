@@ -817,17 +817,21 @@ function extractSourcesSection(answer: string): string | null {
   return answer.slice(match.index).trim();
 }
 
-function preserveSourcesSection(cleanedAnswer: string, originalAnswer: string): string {
-  if (hasSourcesSection(cleanedAnswer)) {
-    return cleanedAnswer;
+function stripSourcesSection(answer: string): string {
+  const match = /(^|\n)\s*Sources\s*:/i.exec(answer);
+  if (!match) {
+    return answer.trim();
   }
+  return answer.slice(0, match.index).trim();
+}
 
+function preserveSourcesSection(cleanedAnswer: string, originalAnswer: string): string {
   const originalSources = extractSourcesSection(originalAnswer);
   if (!originalSources) {
     return cleanedAnswer;
   }
 
-  const prefix = cleanedAnswer.trim();
+  const prefix = stripSourcesSection(cleanedAnswer);
   if (!prefix) {
     return originalAnswer;
   }
