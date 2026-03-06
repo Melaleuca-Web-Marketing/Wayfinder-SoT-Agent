@@ -9,6 +9,11 @@ function parseNonNegativeNumber(raw: string | undefined, fallback: number): numb
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
+function parseUnitIntervalNumber(raw: string | undefined, fallback: number): number {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : fallback;
+}
+
 function parseVectorStoreIds(raw: string | undefined): string[] {
   return (raw ?? '')
     .split(',')
@@ -76,6 +81,7 @@ export const settings = {
   model: process.env.OPENAI_MODEL ?? 'gpt-5.4',
   openAiRequestTimeoutMs: parseNonNegativeNumber(process.env.OPENAI_REQUEST_TIMEOUT_MS, 60000),
   openAiMaxRetries: parseNonNegativeNumber(process.env.OPENAI_MAX_RETRIES, 0),
+  fileSearchScoreThreshold: parseUnitIntervalNumber(process.env.FILE_SEARCH_SCORE_THRESHOLD, 0.55),
   primaryDomain,
   riverbendDomain,
   webCacheTtlSeconds: Number(process.env.WEB_CACHE_TTL_SECONDS ?? '86400'),

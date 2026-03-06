@@ -403,6 +403,10 @@ type ToolDefinition =
       type: 'file_search';
       vector_store_ids?: string[];
       max_num_results?: number;
+      ranking_options?: {
+        ranker?: 'auto';
+        score_threshold?: number;
+      };
     };
 
 interface ToolResources {
@@ -449,6 +453,10 @@ function buildTools(vectorStoreIds: string[] | undefined, domainConfig: DomainCo
     const fileSearchTool: ToolDefinition = {
       type: 'file_search',
       max_num_results: 5,
+      ranking_options: {
+        ranker: 'auto',
+        score_threshold: settings.fileSearchScoreThreshold,
+      },
     };
 
     if (useLegacyToolVectorStoreAttachment) {

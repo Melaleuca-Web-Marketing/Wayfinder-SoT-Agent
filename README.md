@@ -116,6 +116,7 @@ The API layer adds baseline protections so prompt/response handling stays on-bra
 - **Rate limits:** per-minute (`RATE_LIMIT_PER_MINUTE`, default 10) and per-day (`RATE_LIMIT_PER_DAY`, default 200) throttles via `express-rate-limit`. Set `DISABLE_RATE_LIMITS=true` for internal testing environments.
 - **Output enforcement:** `ask()` clamps `max_output_tokens` (default 6,000) while forcing a `Sources:` section. Answers missing an allowlisted Melaleuca URL (or a file citation) fall back to the canonical site URL.
 - **OpenAI request policy:** set `OPENAI_REQUEST_TIMEOUT_MS` (default 60,000) and `OPENAI_MAX_RETRIES` (default 0) to control timeout/fail-fast behavior explicitly.
+- **Vector retrieval quality gate:** set `FILE_SEARCH_SCORE_THRESHOLD` (default `0.55`) to drop low-score vector chunks before synthesis; use `0` to disable thresholding.
 - **Token stream gating:** set `ENABLE_CHAT_TOKEN_STREAMING=true` to enable `/api/chat/stream`, optionally scope with `ENABLE_CHAT_TOKEN_STREAMING_ADMIN_ONLY` and `ENABLE_CHAT_TOKEN_STREAMING_CSR`.
 - **US host strictness (recommended):** set `WEB_SEARCH_ALLOWED_DOMAINS=www.melaleuca.com,cdnsc1.melaleuca.com` to avoid locale subdomain drift (`sg.`, `tw.`, etc.) in web-search retrieval.
   - If `melaleuca.com` (or wildcard variants) is configured, the server now auto-tightens web-search hosts to `www.melaleuca.com` + `cdnsc1.melaleuca.com`.
