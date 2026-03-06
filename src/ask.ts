@@ -317,7 +317,8 @@ function buildAdminSystemPrompt(domainConfig: DomainConfig): string {
     `3. If both fail, respond with: "${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallbackUrl}."\n\n` +
     `Grounding & citations\n` +
     `- Only synthesize from retrieved sources.\n` +
-    `- Copy product names, ingredient names, dosage language, and claims verbatim from cited sources. Do not normalize or "fix" spellings.\n` +
+    `- Keep product names, ingredient names, dosage language, and direct claims exact when quoting from sources.\n` +
+    `- For normal narrative prose, correct obvious spelling or spacing errors while preserving meaning.\n` +
     `- If spelling appears inconsistent across sources, quote the exact source phrase and note the discrepancy.\n` +
     `- Always include a Sources section listing exact URLs (or document titles + canonical_id for files).\n\n` +
     `Image handling\n` +
@@ -352,7 +353,8 @@ function buildCsrSystemPrompt(domainConfig: DomainConfig): string {
     `2. If on-domain results are weak, call file_search on the provided vector stores.\n` +
     `3. If both fail, respond exactly with: "${CSR_FALLBACK_MESSAGE}"\n` +
     `- Only provide information supported by listed resources; do not speculate.\n` +
-    `- Copy product names, ingredient names, dosage language, and claims verbatim from cited sources. Do not normalize or "fix" spellings.\n` +
+    `- Keep product names, ingredient names, dosage language, and direct claims exact when quoting from sources.\n` +
+    `- For normal narrative prose, correct obvious spelling or spacing errors while preserving meaning.\n` +
     `- If spelling appears inconsistent across sources, quote the exact source phrase and note the discrepancy.\n` +
     `- Prefer the most recent official Melaleuca documentation (policies, product pages, SOPs, knowledge articles).\n` +
     `- If resources conflict, note the discrepancy, choose the most recent/authoritative source, and advise to escalate to supervisor.\n` +
