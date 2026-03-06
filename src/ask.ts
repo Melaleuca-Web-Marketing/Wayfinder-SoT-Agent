@@ -773,7 +773,6 @@ async function detectAnswerCorruption(answer: string): Promise<{ needsRetry: boo
 async function rewriteAnswerForQuality(
   answer: string,
   model: string,
-  reasoningEffort?: ReasoningEffort,
 ): Promise<string> {
   const rewriteModel = QUALITY_REWRITE_MODEL || model;
   const response = await client.responses.create(
@@ -804,7 +803,6 @@ async function rewriteAnswerForQuality(
           ],
         },
       ],
-      ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
     } as any,
   );
 
@@ -1309,7 +1307,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       params.onProgress?.({ stage: 'quality_retry_start' });
 
       try {
-        const rewritten = await rewriteAnswerForQuality(finalAnswer, model, params.reasoningEffort);
+        const rewritten = await rewriteAnswerForQuality(finalAnswer, model);
         if (rewritten) {
           const withSources = preserveSourcesSection(ensureSourcesSection(rewritten, params.images), finalAnswer);
           const effectiveAllowedDomains = getEffectiveAllowedDomains(domainConfig);
@@ -1626,7 +1624,7 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
       activeDraftId = nextDraftId;
 
       try {
-        const rewritten = await rewriteAnswerForQuality(finalAnswer, model, params.reasoningEffort);
+        const rewritten = await rewriteAnswerForQuality(finalAnswer, model);
         if (rewritten) {
           const withSources = preserveSourcesSection(ensureSourcesSection(rewritten, params.images), finalAnswer);
           const effectiveAllowedDomains = getEffectiveAllowedDomains(domainConfig);
