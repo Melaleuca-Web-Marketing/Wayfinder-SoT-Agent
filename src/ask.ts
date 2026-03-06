@@ -118,6 +118,7 @@ const MAX_DEBUG_ITEMS = Number(process.env.RETRIEVAL_DEBUG_MAX_ITEMS ?? '6');
 const ENABLE_ANSWER_SELECTION_DEBUG_LOGS = parseBooleanEnv('ENABLE_ANSWER_SELECTION_DEBUG_LOGS', false);
 const MAX_ANSWER_DEBUG_CHARS = Number(process.env.ANSWER_DEBUG_MAX_CHARS ?? '12000');
 const ENABLE_ANSWER_QUALITY_RETRY = parseBooleanEnv('ENABLE_ANSWER_QUALITY_RETRY', true);
+const FORCE_ANSWER_QUALITY_REWRITE = parseBooleanEnv('FORCE_ANSWER_QUALITY_REWRITE', true);
 const QUALITY_CHECK_MODEL = process.env.QUALITY_CHECK_MODEL ?? 'gpt-4.1';
 const QUALITY_REWRITE_MODEL = process.env.QUALITY_REWRITE_MODEL ?? QUALITY_CHECK_MODEL;
 const QUALITY_RETRY_MODEL_PREFIXES = (process.env.QUALITY_RETRY_MODEL_PREFIXES ?? 'gpt-5.4,gpt-5.3-chat')
@@ -1296,7 +1297,10 @@ export async function ask(params: AskParams): Promise<AskResult> {
       attempted: false,
       succeeded: false,
     };
-    const qualityCheck = await detectAnswerCorruption(finalAnswer);
+    const qualityCheck =
+      FORCE_ANSWER_QUALITY_REWRITE ?
+        { needsRetry: true, reason: 'forced_quality_rewrite' }
+      : await detectAnswerCorruption(finalAnswer);
 
     if (qualityCheck.needsRetry) {
       metrics.retries.push(qualityRetryMetric);
@@ -1605,7 +1609,10 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
       attempted: false,
       succeeded: false,
     };
-    const qualityCheck = await detectAnswerCorruption(finalAnswer);
+    const qualityCheck =
+      FORCE_ANSWER_QUALITY_REWRITE ?
+        { needsRetry: true, reason: 'forced_quality_rewrite' }
+      : await detectAnswerCorruption(finalAnswer);
 
     if (qualityCheck.needsRetry) {
       metrics.retries.push(qualityRetryMetric);
