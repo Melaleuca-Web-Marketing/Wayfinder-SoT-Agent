@@ -35,7 +35,7 @@ export interface AskStreamResult extends AskResult {
 }
 
 export interface AskRetryMetric {
-  reason: 'admin_source_fallback' | 'csr_source_fallback';
+  reason: 'admin_source_fallback' | 'csr_source_fallback' | 'quality_cleanup';
   attempted: boolean;
   succeeded: boolean;
   durationMs?: number;
@@ -63,6 +63,8 @@ export interface AskProgressEvent {
     | 'admin_retry_complete'
     | 'csr_retry_start'
     | 'csr_retry_complete'
+    | 'quality_retry_start'
+    | 'quality_retry_complete'
     | 'done';
 }
 
@@ -74,7 +76,7 @@ export interface AskDraftDeltaEvent {
 export interface AskDraftRevisionEvent {
   fromDraftId: string;
   toDraftId: string;
-  reason: 'source_retry' | 'allowlist_replace';
+  reason: 'source_retry' | 'allowlist_replace' | 'quality_retry';
 }
 
 export interface ConversationTurn {
@@ -115,6 +117,12 @@ const MAX_DEBUG_PREVIEW_CHARS = Number(process.env.RETRIEVAL_DEBUG_PREVIEW_CHARS
 const MAX_DEBUG_ITEMS = Number(process.env.RETRIEVAL_DEBUG_MAX_ITEMS ?? '6');
 const ENABLE_ANSWER_SELECTION_DEBUG_LOGS = parseBooleanEnv('ENABLE_ANSWER_SELECTION_DEBUG_LOGS', false);
 const MAX_ANSWER_DEBUG_CHARS = Number(process.env.ANSWER_DEBUG_MAX_CHARS ?? '12000');
+const ENABLE_ANSWER_QUALITY_RETRY = parseBooleanEnv('ENABLE_ANSWER_QUALITY_RETRY', true);
+const QUALITY_CHECK_MODEL = process.env.QUALITY_CHECK_MODEL ?? 'gpt-4.1';
+const QUALITY_RETRY_MODEL_PREFIXES = (process.env.QUALITY_RETRY_MODEL_PREFIXES ?? 'gpt-5.4,gpt-5.3-chat')
+  .split(',')
+  .map((value) => value.trim().toLowerCase())
+  .filter((value) => value.length > 0);
 const IMAGE_ANALYSIS_SCHEMA = {
   name: 'image_extraction',
   schema: {
@@ -141,6 +149,23 @@ const IMAGE_ANALYSIS_SCHEMA = {
         },
         minItems: 0,
         maxItems: 6,
+      },
+    },
+  },
+} as const;
+
+const ANSWER_QUALITY_CHECK_SCHEMA = {
+  name: 'answer_quality_check',
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['needs_retry', 'reason'],
+    properties: {
+      needs_retry: {
+        type: 'boolean',
+      },
+      reason: {
+        type: 'string',
       },
     },
   },
@@ -637,6 +662,160 @@ function buildCsrRetryUserContent(userContent: ResponseInputMessageContentList):
   });
 }
 
+function shouldEvaluateAnswerQuality(model: string): boolean {
+  if (!ENABLE_ANSWER_QUALITY_RETRY) {
+    return false;
+  }
+
+  if (QUALITY_RETRY_MODEL_PREFIXES.length === 0) {
+    return true;
+  }
+
+  const normalizedModel = model.trim().toLowerCase();
+  return QUALITY_RETRY_MODEL_PREFIXES.some((prefix) => normalizedModel.startsWith(prefix));
+}
+
+function parseQualityCheckResult(value: string): { needsRetry: boolean; reason: string } {
+  const fallback = { needsRetry: false, reason: 'quality_check_parse_failed' };
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+
+  try {
+    const cleaned = stripMarkdownCodeFence(trimmed);
+    const data = JSON.parse(cleaned) as {
+      needs_retry?: unknown;
+      reason?: unknown;
+    };
+    const needsRetry = data.needs_retry === true;
+    const reason = typeof data.reason === 'string' && data.reason.trim().length > 0 ? data.reason.trim() : fallback.reason;
+    return { needsRetry, reason };
+  } catch {
+    return fallback;
+  }
+}
+
+async function detectAnswerCorruption(answer: string): Promise<{ needsRetry: boolean; reason: string }> {
+  const text = answer.trim();
+  if (!text || isSourceFallbackAnswer(text)) {
+    return { needsRetry: false, reason: 'fallback_or_empty' };
+  }
+
+  try {
+    const response = await client.responses.create(
+      {
+        model: QUALITY_CHECK_MODEL,
+        max_output_tokens: 160,
+        text: {
+          format: {
+            type: 'json_schema',
+            json_schema: ANSWER_QUALITY_CHECK_SCHEMA,
+          },
+        },
+        input: [
+          {
+            role: 'system',
+            content: [
+              {
+                type: 'input_text',
+                text:
+                  'You are a strict QA checker for assistant responses. ' +
+                  'Return needs_retry=true only when the text has obvious corruption such as clipped words, dropped letters, or malformed fragments. ' +
+                  'Ignore normal style choices, trademarks, markdown, URLs, and brand names.',
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text:
+                  'Evaluate this answer for obvious corruption.\n\n' +
+                  'Answer:\n' +
+                  text,
+              },
+            ],
+          },
+        ],
+      } as any,
+    );
+
+    const parsed = parseQualityCheckResult(normalizeAnswer(response));
+    return parsed;
+  } catch (error) {
+    console.warn('Quality check failed:', error);
+    return { needsRetry: false, reason: 'quality_check_error' };
+  }
+}
+
+async function rewriteAnswerForQuality(
+  answer: string,
+  model: string,
+  reasoningEffort?: ReasoningEffort,
+): Promise<string> {
+  const response = await client.responses.create(
+    {
+      model,
+      max_output_tokens: MAX_OUTPUT_TOKENS,
+      input: [
+        {
+          role: 'system',
+          content: [
+            {
+              type: 'input_text',
+              text:
+                'You are a copy editor for a grounded support answer. ' +
+                'Fix only obvious spelling, spacing, and clipped-word errors. ' +
+                'Do not add or remove claims, numbers, products, URLs, or citations. ' +
+                'Preserve markdown structure and keep the Sources section.',
+            },
+          ],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: `Clean this answer while preserving meaning and citations exactly:\n\n${answer}`,
+            },
+          ],
+        },
+      ],
+      ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
+    } as any,
+  );
+
+  return normalizeAnswer(response).trim();
+}
+
+function extractSourcesSection(answer: string): string | null {
+  const match = /(^|\n)\s*Sources\s*:/i.exec(answer);
+  if (!match) {
+    return null;
+  }
+  return answer.slice(match.index).trim();
+}
+
+function preserveSourcesSection(cleanedAnswer: string, originalAnswer: string): string {
+  if (hasSourcesSection(cleanedAnswer)) {
+    return cleanedAnswer;
+  }
+
+  const originalSources = extractSourcesSection(originalAnswer);
+  if (!originalSources) {
+    return cleanedAnswer;
+  }
+
+  const prefix = cleanedAnswer.trim();
+  if (!prefix) {
+    return originalAnswer;
+  }
+
+  return `${prefix}\n\n${originalSources}`;
+}
+
 function toPreview(value: unknown): string | undefined {
   if (typeof value !== 'string') {
     return undefined;
@@ -1091,6 +1270,39 @@ export async function ask(params: AskParams): Promise<AskResult> {
     }
   }
 
+  if (shouldEvaluateAnswerQuality(model) && !isSourceFallbackAnswer(finalAnswer)) {
+    const qualityRetryMetric: AskRetryMetric = {
+      reason: 'quality_cleanup',
+      attempted: false,
+      succeeded: false,
+    };
+    const qualityCheck = await detectAnswerCorruption(finalAnswer);
+
+    if (qualityCheck.needsRetry) {
+      metrics.retries.push(qualityRetryMetric);
+      qualityRetryMetric.attempted = true;
+      const retryStartMs = Date.now();
+      params.onProgress?.({ stage: 'quality_retry_start' });
+
+      try {
+        const rewritten = await rewriteAnswerForQuality(finalAnswer, model, params.reasoningEffort);
+        if (rewritten) {
+          const withSources = preserveSourcesSection(ensureSourcesSection(rewritten, params.images), finalAnswer);
+          const effectiveAllowedDomains = getEffectiveAllowedDomains(domainConfig);
+          const sanitized = stripDisallowedUrlLines(withSources, effectiveAllowedDomains);
+          finalAnswer = sanitized.trim().length > 0 ? sanitized : finalAnswer;
+        }
+        qualityRetryMetric.succeeded = true;
+        qualityRetryMetric.durationMs = Date.now() - retryStartMs;
+      } catch (error) {
+        qualityRetryMetric.durationMs = Date.now() - retryStartMs;
+        console.warn(`Quality cleanup retry failed (${qualityCheck.reason}):`, error);
+      } finally {
+        params.onProgress?.({ stage: 'quality_retry_complete' });
+      }
+    }
+  }
+
   metrics.totalMs = Date.now() - askStartMs;
   maybeLogRetrievalDebug({
     mode: 'ask',
@@ -1365,6 +1577,44 @@ export async function askStream(params: AskStreamParams): Promise<AskStreamResul
       toDraftId: 'draft_final',
       reason: 'allowlist_replace',
     });
+  }
+
+  if (shouldEvaluateAnswerQuality(model) && !isSourceFallbackAnswer(finalAnswer)) {
+    const qualityRetryMetric: AskRetryMetric = {
+      reason: 'quality_cleanup',
+      attempted: false,
+      succeeded: false,
+    };
+    const qualityCheck = await detectAnswerCorruption(finalAnswer);
+
+    if (qualityCheck.needsRetry) {
+      metrics.retries.push(qualityRetryMetric);
+      qualityRetryMetric.attempted = true;
+      const retryStartMs = Date.now();
+      params.onProgress?.({ stage: 'quality_retry_start' });
+
+      const nextDraftId = activeDraftId === 'draft_final' ? 'draft_quality_2' : 'draft_quality';
+      streamMetrics.draftRevisionCount += 1;
+      params.onDraftRevision?.({ fromDraftId: activeDraftId, toDraftId: nextDraftId, reason: 'quality_retry' });
+      activeDraftId = nextDraftId;
+
+      try {
+        const rewritten = await rewriteAnswerForQuality(finalAnswer, model, params.reasoningEffort);
+        if (rewritten) {
+          const withSources = preserveSourcesSection(ensureSourcesSection(rewritten, params.images), finalAnswer);
+          const effectiveAllowedDomains = getEffectiveAllowedDomains(domainConfig);
+          const sanitized = stripDisallowedUrlLines(withSources, effectiveAllowedDomains);
+          finalAnswer = sanitized.trim().length > 0 ? sanitized : finalAnswer;
+        }
+        qualityRetryMetric.succeeded = true;
+        qualityRetryMetric.durationMs = Date.now() - retryStartMs;
+      } catch (error) {
+        qualityRetryMetric.durationMs = Date.now() - retryStartMs;
+        console.warn(`Quality cleanup retry failed (${qualityCheck.reason}):`, error);
+      } finally {
+        params.onProgress?.({ stage: 'quality_retry_complete' });
+      }
+    }
   }
 
   metrics.totalMs = Date.now() - askStartMs;

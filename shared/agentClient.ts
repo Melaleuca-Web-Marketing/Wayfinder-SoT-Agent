@@ -99,7 +99,7 @@ export type ChatTokenStreamEvent =
       type: 'revision';
       fromDraftId: string;
       toDraftId: string;
-      reason: 'source_retry' | 'allowlist_replace';
+      reason: 'source_retry' | 'allowlist_replace' | 'quality_retry';
       timestamp: string;
     };
 

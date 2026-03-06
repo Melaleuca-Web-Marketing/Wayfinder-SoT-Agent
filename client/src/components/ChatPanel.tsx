@@ -593,6 +593,8 @@ export function ChatPanel() {
                 setChatProgressMessage(
                   event.reason === 'source_retry' ?
                     'Re-checking sources and revising answer...'
+                  : event.reason === 'quality_retry' ?
+                    'Cleaning up wording and fixing obvious typos...'
                   : 'Applying source-safe fallback...',
                 );
                 break;

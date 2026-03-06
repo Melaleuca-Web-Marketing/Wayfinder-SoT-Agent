@@ -839,6 +839,8 @@ export function createApp(): express.Express {
           const revisionMessage =
             event.reason === 'source_retry' ?
               'Re-checking sources and revising answer...'
+            : event.reason === 'quality_retry' ?
+              'Cleaning up wording and fixing obvious typos...'
             : 'Applying source-safe fallback...';
           writeProgressStatus(res, 'verifying', revisionMessage);
           writeProgressEvent(res, {
@@ -1462,6 +1464,10 @@ function mapAskProgressToStreamStatus(
     case 'admin_retry_complete':
     case 'csr_retry_complete':
       return { stage: 'finalizing', message: 'Finalizing response...' };
+    case 'quality_retry_start':
+      return { stage: 'verifying', message: 'Cleaning up wording and fixing obvious typos...' };
+    case 'quality_retry_complete':
+      return { stage: 'finalizing', message: 'Finalizing response...' };
     case 'done':
       return { stage: 'finalizing', message: 'Finalizing response...' };
     default:
@@ -1478,7 +1484,12 @@ function writeProgressEvent(
   payload:
     | { type: 'status'; stage: ChatProgressStage; message: string }
     | { type: 'delta'; draftId: string; text: string }
-    | { type: 'revision'; fromDraftId: string; toDraftId: string; reason: 'source_retry' | 'allowlist_replace' }
+    | {
+        type: 'revision';
+        fromDraftId: string;
+        toDraftId: string;
+        reason: 'source_retry' | 'allowlist_replace' | 'quality_retry';
+      }
     | { type: 'result'; payload: unknown }
     | { type: 'error'; error: string }
     | { type: 'done' },
