@@ -119,6 +119,7 @@ const ENABLE_ANSWER_SELECTION_DEBUG_LOGS = parseBooleanEnv('ENABLE_ANSWER_SELECT
 const MAX_ANSWER_DEBUG_CHARS = Number(process.env.ANSWER_DEBUG_MAX_CHARS ?? '12000');
 const ENABLE_ANSWER_QUALITY_RETRY = parseBooleanEnv('ENABLE_ANSWER_QUALITY_RETRY', true);
 const QUALITY_CHECK_MODEL = process.env.QUALITY_CHECK_MODEL ?? 'gpt-4.1';
+const QUALITY_REWRITE_MODEL = process.env.QUALITY_REWRITE_MODEL ?? QUALITY_CHECK_MODEL;
 const QUALITY_RETRY_MODEL_PREFIXES = (process.env.QUALITY_RETRY_MODEL_PREFIXES ?? 'gpt-5.4,gpt-5.3-chat')
   .split(',')
   .map((value) => value.trim().toLowerCase())
@@ -159,13 +160,19 @@ const ANSWER_QUALITY_CHECK_SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['needs_retry', 'reason'],
+    required: ['needs_retry', 'reason', 'suspicious_tokens'],
     properties: {
       needs_retry: {
         type: 'boolean',
       },
       reason: {
         type: 'string',
+      },
+      suspicious_tokens: {
+        type: 'array',
+        items: {
+          type: 'string',
+        },
       },
     },
   },
@@ -675,8 +682,8 @@ function shouldEvaluateAnswerQuality(model: string): boolean {
   return QUALITY_RETRY_MODEL_PREFIXES.some((prefix) => normalizedModel.startsWith(prefix));
 }
 
-function parseQualityCheckResult(value: string): { needsRetry: boolean; reason: string } {
-  const fallback = { needsRetry: false, reason: 'quality_check_parse_failed' };
+function parseQualityCheckResult(value: string): { needsRetry: boolean; reason: string; suspiciousTokens: string[] } {
+  const fallback = { needsRetry: false, reason: 'quality_check_parse_failed', suspiciousTokens: [] as string[] };
   const trimmed = value.trim();
   if (!trimmed) {
     return fallback;
@@ -687,10 +694,15 @@ function parseQualityCheckResult(value: string): { needsRetry: boolean; reason: 
     const data = JSON.parse(cleaned) as {
       needs_retry?: unknown;
       reason?: unknown;
+      suspicious_tokens?: unknown;
     };
     const needsRetry = data.needs_retry === true;
     const reason = typeof data.reason === 'string' && data.reason.trim().length > 0 ? data.reason.trim() : fallback.reason;
-    return { needsRetry, reason };
+    const suspiciousTokens =
+      Array.isArray(data.suspicious_tokens) ?
+        data.suspicious_tokens.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : [];
+    return { needsRetry, reason, suspiciousTokens };
   } catch {
     return fallback;
   }
@@ -721,7 +733,8 @@ async function detectAnswerCorruption(answer: string): Promise<{ needsRetry: boo
                 type: 'input_text',
                 text:
                   'You are a strict QA checker for assistant responses. ' +
-                  'Return needs_retry=true only when the text has obvious corruption such as clipped words, dropped letters, or malformed fragments. ' +
+                  'Set needs_retry=true if there is any likely typo corruption, including clipped words, dropped letters, fused words, or malformed fragments. ' +
+                  'Be strict: one suspicious token is enough to require retry. ' +
                   'Ignore normal style choices, trademarks, markdown, URLs, and brand names.',
               },
             ],
@@ -732,7 +745,7 @@ async function detectAnswerCorruption(answer: string): Promise<{ needsRetry: boo
               {
                 type: 'input_text',
                 text:
-                  'Evaluate this answer for obvious corruption.\n\n' +
+                  'Evaluate this answer for typo corruption.\n\n' +
                   'Answer:\n' +
                   text,
               },
@@ -743,7 +756,13 @@ async function detectAnswerCorruption(answer: string): Promise<{ needsRetry: boo
     );
 
     const parsed = parseQualityCheckResult(normalizeAnswer(response));
-    return parsed;
+    return {
+      needsRetry: parsed.needsRetry || parsed.suspiciousTokens.length > 0,
+      reason:
+        parsed.suspiciousTokens.length > 0 ?
+          `${parsed.reason} | tokens: ${parsed.suspiciousTokens.join(', ')}`
+        : parsed.reason,
+    };
   } catch (error) {
     console.warn('Quality check failed:', error);
     return { needsRetry: false, reason: 'quality_check_error' };
@@ -755,9 +774,10 @@ async function rewriteAnswerForQuality(
   model: string,
   reasoningEffort?: ReasoningEffort,
 ): Promise<string> {
+  const rewriteModel = QUALITY_REWRITE_MODEL || model;
   const response = await client.responses.create(
     {
-      model,
+      model: rewriteModel,
       max_output_tokens: MAX_OUTPUT_TOKENS,
       input: [
         {
