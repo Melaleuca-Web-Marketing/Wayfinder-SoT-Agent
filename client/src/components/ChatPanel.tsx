@@ -65,8 +65,18 @@ interface TurnTrace {
   backend?: ChatResponseBody['metrics'];
 }
 
+interface LastRequestAttempt {
+  requestBody: ChatRequestBody;
+  displayContent: string;
+  userImages: ChatImage[];
+}
+
+type SourceFallbackKind = 'csr' | 'admin' | null;
+
 const MAX_ATTACHMENTS = 3;
 const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024; // 4MB
+const CSR_FALLBACK_MESSAGE = 'No verified sources found.';
+const ADMIN_FALLBACK_PREFIX = "i couldn't confirm from our site or files.";
 
 const makeId = () => (typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2));
 
@@ -203,6 +213,20 @@ const formatTimestamp = (iso: string | undefined): string => {
   return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 };
 
+const detectSourceFallbackKind = (content: string): SourceFallbackKind => {
+  const normalized = content.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === CSR_FALLBACK_MESSAGE.toLowerCase()) {
+    return 'csr';
+  }
+  if (normalized.startsWith(ADMIN_FALLBACK_PREFIX)) {
+    return 'admin';
+  }
+  return null;
+};
+
 export function ChatPanel() {
   const [topicHint, setTopicHint] = useState<'melaleuca' | 'riverbend'>('melaleuca');
   const [adminModelPreset, setAdminModelPreset] = useState<AdminModelPreset>('gpt-5.4-low');
@@ -226,6 +250,7 @@ export function ChatPanel() {
   const hasManualModelSelectionRef = useRef(false);
   const telemetrySessionIdRef = useRef<string | null>(null);
   const telemetryClientSessionIdRef = useRef<string>(makeId());
+  const lastRequestRef = useRef<LastRequestAttempt | null>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -428,41 +453,13 @@ export function ChatPanel() {
     [finalizeMessage],
   );
 
-  const handleSubmit = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      const trimmed = input.trim();
-      if ((trimmed.length === 0 && attachments.length === 0) || loading) {
+  const executeChatRequest = useCallback(
+    async (attempt: LastRequestAttempt) => {
+      if (loading) {
         return;
       }
 
-      setInput('');
-      setError(null);
-
-      const historyPayload =
-        previousResponseId ?
-          []
-        : messages.map((turn) => ({
-            role: turn.role,
-            content: turn.content,
-            images: turn.images?.map(({ name, mimeType }) => ({ name, mimeType })),
-          }));
-
-      const imagePayload = attachments.map((attachment) => ({
-        data: attachment.base64,
-        mimeType: attachment.mimeType,
-        name: attachment.name,
-      }));
-
-      const userImages: ChatImage[] = attachments.map((attachment) => ({
-        id: attachment.id,
-        url: attachment.dataUrl,
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-      }));
-
-      const displayContent = trimmed.length > 0 ? trimmed : userImages.length > 0 ? '(Image attachment)' : '';
-
+      const { requestBody, displayContent, userImages } = attempt;
       const userMessage: ChatTurn = {
         id: makeId(),
         role: 'user',
@@ -470,8 +467,8 @@ export function ChatPanel() {
         images: userImages.length > 0 ? userImages : undefined,
       };
 
+      setError(null);
       setMessages((prev) => [...prev, userMessage]);
-      setAttachments([]);
       setLoading(true);
       setChatProgressMessage('Running safety checks...');
 
@@ -558,15 +555,6 @@ export function ChatPanel() {
           });
         };
 
-        const requestBody: ChatRequestBody = {
-          message: trimmed,
-          topicHint,
-          history: historyPayload,
-          images: imagePayload,
-          agentProfile: 'admin',
-          adminModelPreset,
-          ...(previousResponseId ? { previousResponseId } : {}),
-        };
         let usedTokenStream = true;
         let data: ChatResponseBody;
 
@@ -665,8 +653,8 @@ export function ChatPanel() {
               question: displayContent,
               answer: data.answer,
               responseMs: data.metrics?.totalMs ?? totalClientMs,
-              model: adminModelPreset,
-              topicHint,
+              model: requestBody.adminModelPreset ?? adminModelPreset,
+              topicHint: requestBody.topicHint,
               responseId,
               requestedAt: new Date(requestSentAtMs).toISOString(),
               respondedAt: new Date(doneAtMs).toISOString(),
@@ -686,8 +674,77 @@ export function ChatPanel() {
         setChatProgressMessage(null);
       }
     },
-    [adminModelPreset, attachments, ensureTelemetrySession, input, loading, messages, previousResponseId, topicHint],
+    [adminModelPreset, ensureTelemetrySession, loading],
   );
+
+  const handleSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const trimmed = input.trim();
+      if ((trimmed.length === 0 && attachments.length === 0) || loading) {
+        return;
+      }
+
+      const historyPayload =
+        previousResponseId ?
+          []
+        : messages.map((turn) => ({
+            role: turn.role,
+            content: turn.content,
+            images: turn.images?.map(({ name, mimeType }) => ({ name, mimeType })),
+          }));
+
+      const imagePayload = attachments.map((attachment) => ({
+        data: attachment.base64,
+        mimeType: attachment.mimeType,
+        name: attachment.name,
+      }));
+
+      const userImages: ChatImage[] = attachments.map((attachment) => ({
+        id: attachment.id,
+        url: attachment.dataUrl,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+      }));
+
+      const displayContent = trimmed.length > 0 ? trimmed : userImages.length > 0 ? '(Image attachment)' : '';
+
+      const requestBody: ChatRequestBody = {
+        message: trimmed,
+        topicHint,
+        history: historyPayload,
+        images: imagePayload,
+        agentProfile: 'admin',
+        adminModelPreset,
+        ...(previousResponseId ? { previousResponseId } : {}),
+      };
+
+      const attempt: LastRequestAttempt = {
+        requestBody,
+        displayContent,
+        userImages,
+      };
+      lastRequestRef.current = attempt;
+
+      setInput('');
+      setAttachments([]);
+      await executeChatRequest(attempt);
+    },
+    [adminModelPreset, attachments, executeChatRequest, input, loading, messages, previousResponseId, topicHint],
+  );
+
+  const handleRetryLastRequest = useCallback(() => {
+    if (loading) {
+      return;
+    }
+
+    const lastAttempt = lastRequestRef.current;
+    if (!lastAttempt) {
+      return;
+    }
+
+    void executeChatRequest(lastAttempt);
+  }, [executeChatRequest, loading]);
 
   const stopVoiceSession = useCallback(() => {
     dataChannelRef.current?.close();
@@ -835,6 +892,23 @@ export function ChatPanel() {
     () => messages.some((turn) => turn.role === 'assistant' && turn.streaming),
     [messages],
   );
+  const latestAssistantFallbackKind = useMemo<SourceFallbackKind>(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const turn = messages[index];
+      if (turn.role !== 'assistant' || turn.streaming) {
+        continue;
+      }
+      return detectSourceFallbackKind(turn.content);
+    }
+    return null;
+  }, [messages]);
+  const canRetryLastRequest = latestAssistantFallbackKind != null && lastRequestRef.current != null && !loading;
+  const retryBannerMessage =
+    latestAssistantFallbackKind === 'csr' ?
+      'No verified sources found. Retry this question?'
+    : latestAssistantFallbackKind === 'admin' ?
+      "Couldn't verify from allowlisted sources. Retry this question?"
+    : null;
   const responseModeMeta = useMemo(() => {
     switch (responseMode) {
       case 'token-stream':
@@ -872,6 +946,7 @@ export function ChatPanel() {
     setMessages([]);
     setAttachments([]);
     telemetrySessionIdRef.current = null;
+    lastRequestRef.current = null;
     setResponseMode('not-tested');
     setError(null);
   }, []);
@@ -884,6 +959,7 @@ export function ChatPanel() {
     setMessages([]);
     setAttachments([]);
     telemetrySessionIdRef.current = null;
+    lastRequestRef.current = null;
     setResponseMode('not-tested');
     setError(null);
   }, []);
@@ -939,6 +1015,7 @@ export function ChatPanel() {
               setAttachments([]);
               setPreviousResponseId(null);
               telemetrySessionIdRef.current = null;
+              lastRequestRef.current = null;
               setResponseMode('not-tested');
             }}
             disabled={loading}
@@ -1094,6 +1171,14 @@ export function ChatPanel() {
 
       {error && <div className="chat-error">{error}</div>}
       {voiceError && <div className="chat-error">{voiceError}</div>}
+      {canRetryLastRequest && retryBannerMessage && (
+        <div className="chat-retry-banner">
+          <span>{retryBannerMessage}</span>
+          <button type="button" className="secondary" onClick={handleRetryLastRequest} disabled={loading}>
+            Retry last request
+          </button>
+        </div>
+      )}
 
       <form className="chat-form" onSubmit={handleSubmit}>
         <textarea

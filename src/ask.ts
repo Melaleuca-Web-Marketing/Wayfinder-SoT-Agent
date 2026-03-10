@@ -336,18 +336,27 @@ function buildSystemPrompt(domainConfig: DomainConfig, agentProfile: AgentProfil
 function buildAdminSystemPrompt(domainConfig: DomainConfig): string {
   const [primary, secondary] = domainConfig.preferredDomains;
   const fallbackUrl = domainConfig.fallbackUrl;
+  const fileSearchEnabled = settings.enableVectorFileSearchFallback;
   const siteDirectives = domainConfig.preferredDomains
     .map((domain, index) => `${index + 1}. ${domain}`)
     .join('\n');
   const secondaryDirective = secondary
     ? `- If that fails and you have a second domain, try it next using "site:${stripScheme(secondary)}".\n`
     : '';
+  const retrievalStep2 =
+    fileSearchEnabled ?
+      `2. If on-domain results are weak, call file_search on the provided vector stores.\n`
+    : `2. If on-domain results are weak, continue web_search on allowlisted domains only (file_search disabled).\n`;
+  const retrievalStep3 =
+    fileSearchEnabled ?
+      `3. If both fail, respond with: "${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallbackUrl}."\n\n`
+    : `3. If allowlisted web_search still cannot confirm, respond with: "${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallbackUrl}."\n\n`;
 
   return `You are Melaleuca's web-first knowledge agent. Follow these rules strictly:\n\n` +
     `Retrieval order\n` +
     `1. Use web_search first. Prefer results from these domains, in order:\n${siteDirectives}\n` +
-    `2. If on-domain results are weak, call file_search on the provided vector stores.\n` +
-    `3. If both fail, respond with: "${ADMIN_FALLBACK_MESSAGE_PREFIX} Please check: ${fallbackUrl}."\n\n` +
+    retrievalStep2 +
+    retrievalStep3 +
     `Grounding & citations\n` +
     `- Only synthesize from retrieved sources.\n` +
     `- Keep product names, ingredient names, dosage language, and direct claims exact when quoting from sources.\n` +
@@ -369,12 +378,21 @@ function buildAdminSystemPrompt(domainConfig: DomainConfig): string {
 
 function buildCsrSystemPrompt(domainConfig: DomainConfig): string {
   const [primary, secondary] = domainConfig.preferredDomains;
+  const fileSearchEnabled = settings.enableVectorFileSearchFallback;
   const siteDirectives = domainConfig.preferredDomains
     .map((domain, index) => `${index + 1}. ${domain}`)
     .join('\n');
   const secondaryDirective = secondary
     ? `- If that fails and you have a second domain, try it next using "site:${stripScheme(secondary)}".\n`
     : '';
+  const retrievalStep2 =
+    fileSearchEnabled ?
+      `2. If on-domain results are weak, call file_search on the provided vector stores.\n`
+    : `2. If on-domain results are weak, continue web_search on allowlisted domains only (file_search disabled).\n`;
+  const retrievalStep3 =
+    fileSearchEnabled ?
+      `3. If both fail, respond exactly with: "${CSR_FALLBACK_MESSAGE}"\n`
+    : `3. If allowlisted web_search still cannot confirm, respond exactly with: "${CSR_FALLBACK_MESSAGE}"\n`;
 
   return `You are Melaleuca's customer service knowledge assistant. Use the language and tone of official Melaleuca materials while delivering a world-class customer experience: warm, professional, respectful, and efficient.\n\n` +
     `Responses must follow this structure every time\n` +
@@ -383,8 +401,8 @@ function buildCsrSystemPrompt(domainConfig: DomainConfig): string {
     `3. End with a short list of verified resources (titles and links or identifiers).\n\n` +
     `Retrieval and verification\n` +
     `1. Use web_search first. Prefer results from these domains, in order:\n${siteDirectives}\n` +
-    `2. If on-domain results are weak, call file_search on the provided vector stores.\n` +
-    `3. If both fail, respond exactly with: "${CSR_FALLBACK_MESSAGE}"\n` +
+    retrievalStep2 +
+    retrievalStep3 +
     `- Only provide information supported by listed resources; do not speculate.\n` +
     `- Keep product names, ingredient names, dosage language, and direct claims exact when quoting from sources.\n` +
     `- For normal narrative prose, correct obvious spelling or spacing errors while preserving meaning.\n` +
@@ -473,8 +491,9 @@ function buildTools(vectorStoreIds: string[] | undefined, domainConfig: DomainCo
   ];
 
   const stores = vectorStoreIds ?? settings.vectorStoreIds;
+  const fileSearchEnabled = settings.enableVectorFileSearchFallback;
   const toolResources: ToolResources | undefined =
-    stores.length > 0
+    fileSearchEnabled && stores.length > 0
       ? {
           file_search: {
             vector_store_ids: stores,
@@ -1738,10 +1757,14 @@ function buildAttachmentHint(images: AskImage[] | undefined): string | null {
   }
 
   const labels = images.map((image, index) => image.name ?? `image ${index + 1}`);
+  const citationInstruction =
+    settings.enableVectorFileSearchFallback ?
+      'Use those findings to search melaleuca.com or the vector store so you can cite an on-domain source for every claim.'
+    : 'Use those findings to search melaleuca.com allowlisted domains so you can cite an on-domain source for every claim.';
   return (
     `Uploaded images: ${labels.join(', ')}.` +
     '\nFirst, visually analyze every attachment. Extract any readable labels, product names, numbers, or logos, and summarize the imagery before calling tools.' +
-    '\nUse those findings to search melaleuca.com or the vector store so you can cite an on-domain source for every claim.' +
+    `\n${citationInstruction}` +
     '\nIf the user text is ambiguous but the image reveals the product, proceed with the best-supported answer instead of asking for another photo.'
   );
 }
